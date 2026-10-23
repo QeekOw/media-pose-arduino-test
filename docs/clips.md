@@ -4,15 +4,15 @@ The five Clips of the Video phase, one per situation. The video files are not co
 
 ## Clip list
 
-Fill in the source URL and license when downloading. Fill in the duration from the `prepare-clips.ps1` table.
+Duration is that of the prepared Clip, as reported by `prepare-clips.ps1`. `side` is a gym treadmill, `fast` is trampoline jumping, `far` is a small figure dancing in a large room, and `empty` is a hallway with no one in it.
 
 | Clip | Situation | Source URL | License | Duration (s) |
 | --- | --- | --- | --- | --- |
-| `front.mp4` | Front view, mostly still | TBD | TBD | TBD |
-| `side.mp4` | Side view | TBD | TBD | TBD |
-| `fast.mp4` | Fast movement (jumping jacks, squats) | TBD | TBD | TBD |
-| `far.mp4` | Far away or partly hidden | TBD | TBD | TBD |
-| `empty.mp4` | Empty room, no person | TBD | TBD | TBD |
+| `front.mp4` | Front view, mostly still | https://www.pexels.com/video/a-woman-standing-outdoors-while-drinking-a-cup-of-coffee-3044530/ | Pexels License | 26.6 |
+| `side.mp4` | Side view | https://www.pexels.com/video/young-man-running-on-treadmill-9777600/ | Pexels License | 23.0 |
+| `fast.mp4` | Fast movement (jumping jacks, squats) | https://www.pexels.com/video/a-woman-jumping-on-a-trampoline-6571901/ | Pexels License | 23.7 |
+| `far.mp4` | Far away or partly hidden | https://www.pexels.com/video/a-person-dancing-in-the-room-6834861/ | Pexels License | 27.0 |
+| `empty.mp4` | Empty room, no person | https://www.pexels.com/video/elegant-empty-hallway-with-classic-architecture-37410272/ | Pexels License | 22.5 |
 
 ## Choosing a clip
 
