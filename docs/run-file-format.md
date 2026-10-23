@@ -23,6 +23,7 @@ A Run file with no `status` line counts as failed. On Linux an out-of-memory kil
   "clip": "smoke.mp4",
   "repeat": 1,
   "started_at": "2026-10-23T12:00:00+00:00",
+  "sample_interval_s": 1.0,
   "machine": {
     "name": "board",
     "os": "Debian GNU/Linux 13 (trixie)",
@@ -39,7 +40,7 @@ A Run file with no `status` line counts as failed. On Linux an out-of-memory kil
 }
 ```
 
-`variant` is `lite`, `full` or `heavy`. `phase` is `video` or `webcam`. `machine.name` is `board` or `dev`.
+`variant` is `lite`, `full` or `heavy`. `phase` is `video` or `webcam`. `machine.name` is `board` or `dev`. `sample_interval_s` is the `--sample-interval` the Run used; Run files written before it existed lack it.
 
 ## `frame`
 
@@ -56,19 +57,20 @@ Frame time is `video_ms + model_ms`.
 ## `sample`
 
 ```json
-{"type": "sample", "t_ms": 1000, "cpu_pct": 87.0, "ram_used_mb": 1100, "rss_mb": 310, "temp_c": 62.5, "cpu_mhz": 2016}
+{"type": "sample", "t_ms": 1000, "cpu_pct": 87.0, "ram_used_mb": 1100, "rss_mb": 310, "rss_peak_mb": 450, "temp_c": 62.5, "cpu_mhz": 2016}
 ```
 
-A background thread reads the system at a fixed interval (`--sample-interval`, default 1 s), plus once at the start and once at the end of the Run. The main thread writes the queued samples after each frame and before the `status` line, so it stays the only writer.
+A background thread reads the system at a fixed interval (`--sample-interval`, default 1 s), plus once at the start and once at the end of the Run. The main thread writes the queued samples right after sampling starts, after each frame and before the `status` line, so it stays the only writer. Samples taken while the model loads have no frame boundary to be written at, so a kill during model load loses them.
 
 - `t_ms` is milliseconds since sampling started.
 - `cpu_pct` is system-wide CPU busy percent since the previous sample, from the `cpu` line of `/proc/stat`. It is `null` in the first sample.
 - `ram_used_mb` is `MemTotal - MemAvailable` from `/proc/meminfo`.
 - `rss_mb` is the Run process's resident memory (`VmRSS` in `/proc/self/status`).
+- `rss_peak_mb` is the Run process's resident high-water mark so far (`VmHWM` in `/proc/self/status`). The kernel tracks it exactly, so it catches spikes between samples. Analysis reports peak RSS from it, or from `rss_mb` in Run files written before it existed.
 - `temp_c` is the highest `/sys/class/thermal/thermal_zone*/temp` over zones whose `type` starts with `cpu` (on the Board `cpuss0-thermal` and `cpuss1-thermal`), or over all zones when none does.
 - `cpu_mhz` is the highest `scaling_cur_freq` across cores. Idle cores clock down on their own, but a thermal throttle caps every core, so the highest one shows the throttle.
 
-Any value the machine cannot provide is `null`. The Dev machine (Windows) has none of these files, so every reading in its samples is `null`.
+Every reading is a number or `null`, and `t_ms` is an integer. Any value the machine cannot provide is `null`. The Dev machine (Windows) has none of these files, so every reading in its samples is `null`.
 
 ## `status`
 
@@ -80,4 +82,4 @@ Any value the machine cannot provide is `null`. The Dev machine (Windows) has no
 
 ## Unreadable Run files
 
-Analysis never aborts on a bad Run file. An empty file, a missing header, or an unparseable line (anywhere but a truncated last line) makes that Run a failed row, shown as `failed: no header line` or `failed: corrupt line N`. Frames read before the bad line are kept, and a status line after a bad line is ignored. When the header is missing, variant, clip, repeat and machine come from the file name, which is why the name pattern above matters.
+Analysis never aborts on a bad Run file. An empty file, a missing header, an unparseable line (anywhere but a truncated last line), or a `sample` line with a value of the wrong type makes that Run a failed row, shown as `failed: no header line` or `failed: corrupt line N`. Frames read before the bad line are kept, and a status line after a bad line is ignored. When the header is missing, variant, clip, repeat and machine come from the file name, which is why the name pattern above matters.

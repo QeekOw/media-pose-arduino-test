@@ -1,8 +1,6 @@
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-
-from bench.sampler import Sample
 
 
 @dataclass(frozen=True)
@@ -17,6 +15,7 @@ class Header:
     software: dict = field(default_factory=dict)
     model: dict = field(default_factory=dict)
     clip_info: dict = field(default_factory=dict)
+    sample_interval_s: float | None = None
 
     @property
     def machine_name(self) -> str:
@@ -33,6 +32,32 @@ class Frame:
     @property
     def frame_ms(self) -> float:
         return self.video_ms + self.model_ms
+
+
+@dataclass(frozen=True)
+class Sample:
+    t_ms: int
+    cpu_pct: float | None
+    ram_used_mb: int | None
+    rss_mb: int | None
+    rss_peak_mb: int | None
+    temp_c: float | None
+    cpu_mhz: int | None
+
+
+READINGS = tuple(f.name for f in fields(Sample) if f.name != "t_ms")
+
+
+def _sample(record: dict) -> Sample:
+    # bool is an int subclass, so true/false would otherwise pass as readings.
+    t_ms = record["t_ms"]
+    if type(t_ms) is not int:
+        raise TypeError(f"t_ms is not an integer: {t_ms!r}")
+    readings = {name: record.get(name) for name in READINGS}
+    for name, value in readings.items():
+        if value is not None and type(value) not in (int, float):
+            raise TypeError(f"{name} is not a number: {value!r}")
+    return Sample(t_ms=t_ms, **readings)
 
 
 @dataclass(frozen=True)
@@ -70,6 +95,7 @@ def read_run(path: str | Path) -> RunFile:
                     software=record.get("software", {}),
                     model=record.get("model", {}),
                     clip_info=record.get("clip_info", {}),
+                    sample_interval_s=record.get("sample_interval_s"),
                 )
             elif kind == "frame":
                 frames.append(
@@ -81,16 +107,7 @@ def read_run(path: str | Path) -> RunFile:
                     )
                 )
             elif kind == "sample":
-                samples.append(
-                    Sample(
-                        t_ms=record["t_ms"],
-                        cpu_pct=record.get("cpu_pct"),
-                        ram_used_mb=record.get("ram_used_mb"),
-                        rss_mb=record.get("rss_mb"),
-                        temp_c=record.get("temp_c"),
-                        cpu_mhz=record.get("cpu_mhz"),
-                    )
-                )
+                samples.append(_sample(record))
             elif kind == "status":
                 status = record["status"]
         except json.JSONDecodeError:

@@ -6,9 +6,9 @@ from bench.analysis import analyze, main
 from bench.runfile import read_run
 
 
-def sample(t_ms=0, cpu_pct=50.0, ram_used_mb=1000, rss_mb=200, temp_c=60.0, cpu_mhz=2016):
+def sample(t_ms=0, cpu_pct=50.0, ram_used_mb=1000, rss_mb=200, rss_peak_mb=None, temp_c=60.0, cpu_mhz=2016):
     return {"type": "sample", "t_ms": t_ms, "cpu_pct": cpu_pct, "ram_used_mb": ram_used_mb, "rss_mb": rss_mb,
-            "temp_c": temp_c, "cpu_mhz": cpu_mhz}
+            "rss_peak_mb": rss_peak_mb, "temp_c": temp_c, "cpu_mhz": cpu_mhz}
 
 
 def write_run(
@@ -301,6 +301,7 @@ def test_missing_readings_are_not_flagged_and_show_as_dashes(tmp_path, capsys):
         ([100] * 60, [sample(cpu_mhz=0)], "clock 0"),
         ([100] * 60, [sample(ram_used_mb=0)], "ram 0"),
         ([100] * 60, [sample(rss_mb=0)], "ram 0"),
+        ([100] * 60, [sample(rss_peak_mb=0)], "ram 0"),
         ([100] * 60, [sample(cpu_pct=-1.0)], "cpu % out of range"),
         ([100] * 60, [sample(cpu_pct=100.5)], "cpu % out of range"),
     ],
@@ -323,3 +324,64 @@ def test_clean_run_has_no_flags(tmp_path, capsys):
     assert s.flags == ()
     assert main([str(run)]) == 0
     assert capsys.readouterr().out.splitlines()[1].endswith(" -")
+
+
+def test_avg_cpu_weights_each_reading_by_the_time_it_covers(tmp_path):
+    # The 10 ms reading from stop() barely moves the average: (1000 * 100 + 10 * 0) / 1010.
+    samples = [sample(0, cpu_pct=None), sample(1000, cpu_pct=100.0), sample(1010, cpu_pct=0.0)]
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, samples=samples)
+
+    (s,) = analyze([run])
+
+    assert s.avg_cpu_pct == pytest.approx(99.00990099)
+
+
+def test_avg_cpu_is_none_when_no_reading_covers_any_time(tmp_path):
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, samples=[sample(0), sample(0)])
+
+    (s,) = analyze([run])
+
+    assert s.avg_cpu_pct is None
+
+
+def test_peak_rss_uses_the_high_water_mark_over_polled_rss(tmp_path):
+    samples = [sample(0, rss_mb=200, rss_peak_mb=210), sample(1000, rss_mb=300, rss_peak_mb=450)]
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, samples=samples)
+
+    (s,) = analyze([run])
+
+    assert s.peak_rss_mb == 450
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        sample(1000, cpu_pct="bad"),
+        sample(1000, ram_used_mb="1000"),
+        sample(1000, temp_c=True),
+        sample(1000, rss_peak_mb=[450]),
+        sample(t_ms=1.5),
+        sample(t_ms=None),
+    ],
+)
+def test_sample_with_a_non_number_value_fails_only_its_run(tmp_path, capsys, bad):
+    write_run(tmp_path / "a.jsonl", [100] * 60, clip="bad.mp4", samples=[sample(0), bad, sample(2000)])
+    write_run(tmp_path / "b.jsonl", [100] * 60, clip="good.mp4", samples=[sample(0), sample(1000)])
+
+    assert main([str(tmp_path)]) == 0
+
+    rows = capsys.readouterr().out.splitlines()
+    # Header, 60 frames and one good sample come first, so the bad sample is line 63.
+    assert "failed: corrupt line 63" in next(r for r in rows if "bad.mp4" in r)
+    assert "completed" in next(r for r in rows if "good.mp4" in r)
+    assert len(read_run(tmp_path / "a.jsonl").frames) == 60
+
+
+def test_header_sample_interval_is_optional(tmp_path):
+    old = write_run(tmp_path / "old.jsonl", [100] * 60)
+    new = write_run(tmp_path / "new.jsonl", [100] * 60)
+    header, *rest = new.read_text(encoding="utf-8").splitlines()
+    new.write_text("\n".join([json.dumps({**json.loads(header), "sample_interval_s": 0.5}), *rest]) + "\n")
+
+    assert read_run(old).header.sample_interval_s is None
+    assert read_run(new).header.sample_interval_s == 0.5
