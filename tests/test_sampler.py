@@ -1,3 +1,4 @@
+import math
 import time
 
 import pytest
@@ -10,7 +11,7 @@ def write_tree(root, stat="cpu  100 0 100 700 100 0 0 0 50 0\ncpu0 50 0 50 350 5
     (proc / "self").mkdir(parents=True, exist_ok=True)
     (proc / "stat").write_text(stat)
     (proc / "meminfo").write_text("MemTotal:        3755008 kB\nMemFree:          500000 kB\nMemAvailable:    2730008 kB\n")
-    (proc / "self" / "status").write_text("Name:\tpython\nVmPeak:\t  300000 kB\nVmRSS:\t  204800 kB\n")
+    (proc / "self" / "status").write_text("Name:\tpython\nVmPeak:\t  300000 kB\nVmHWM:\t  460800 kB\nVmRSS:\t  204800 kB\n")
     sys = root / "sys"
     if zones is None:
         zones = [("cpuss0-thermal", 61500), ("cpuss1-thermal", 63200), ("battery", 90000)]
@@ -43,6 +44,7 @@ def test_reads_board_style_files(tmp_path):
     for s in (first, last):
         assert s.ram_used_mb == 1000
         assert s.rss_mb == 200
+        assert s.rss_peak_mb == 450
         assert s.temp_c == pytest.approx(63.2)
         assert s.cpu_mhz == 2016
 
@@ -66,7 +68,7 @@ def test_missing_files_give_none_without_raising(tmp_path):
 
     assert len(samples) == 2
     for s in samples:
-        assert (s.cpu_pct, s.ram_used_mb, s.rss_mb, s.temp_c, s.cpu_mhz) == (None, None, None, None, None)
+        assert (s.cpu_pct, s.ram_used_mb, s.rss_mb, s.rss_peak_mb, s.temp_c, s.cpu_mhz) == (None,) * 6
 
 
 def test_samples_at_the_interval_while_running(tmp_path):
@@ -81,3 +83,20 @@ def test_samples_at_the_interval_while_running(tmp_path):
     assert len(samples) > 3
     assert [s.t_ms for s in samples] == sorted(s.t_ms for s in samples)
     assert sampler.drain() == []
+
+
+def test_undecodable_zone_type_still_gives_a_sample(tmp_path):
+    proc, sys = write_tree(tmp_path, zones=[("cpuss0-thermal", 61500)])
+    (sys / "class" / "thermal" / "thermal_zone0" / "type").write_bytes(b"\xff\xfe\n")
+    sampler = Sampler(interval_s=60, proc_root=proc, sys_root=sys)
+
+    sampler.start()
+    sampler.stop()
+
+    assert [s.temp_c for s in sampler.drain()] == [pytest.approx(61.5)] * 2
+
+
+@pytest.mark.parametrize("interval_s", [0, -1.0, math.inf, math.nan])
+def test_rejects_an_interval_that_is_not_finite_and_positive(interval_s):
+    with pytest.raises(ValueError):
+        Sampler(interval_s=interval_s)

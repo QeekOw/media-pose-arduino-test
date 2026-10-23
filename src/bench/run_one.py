@@ -4,6 +4,7 @@
 """
 import argparse
 import json
+import math
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -23,6 +24,13 @@ def _landmarks(result) -> list | None:
     if not result.pose_landmarks:
         return None
     return [[lm.x, lm.y, lm.z, lm.visibility] for lm in result.pose_landmarks[0]]
+
+
+def _sample_interval(text: str) -> float:
+    value = float(text)
+    if not (math.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError(f"must be a finite number of seconds above 0, got {text}")
+    return value
 
 
 def run_video(
@@ -54,6 +62,7 @@ def run_video(
             "clip": clip.name,
             "repeat": repeat,
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "sample_interval_s": sample_interval,
             "machine": machine_info(machine, out_dir),
             "software": software_info(),
             "model": {"file": model.path.name, "size_bytes": model.size_bytes, "sha256": model.sha256},
@@ -67,6 +76,7 @@ def run_video(
         # The sampler thread only queues; this thread stays the Run file's only writer.
         sampler = Sampler(sample_interval)
         sampler.start()
+        write_samples()
         status, detail = "crashed", "interrupted"
         try:
             options = vision.PoseLandmarkerOptions(
@@ -119,7 +129,7 @@ def main() -> None:
     p.add_argument("--machine", default=default_machine_name())
     p.add_argument("--out-dir", type=Path, default=Path("runs"))
     p.add_argument("--models-dir", type=Path, default=Path("models"))
-    p.add_argument("--sample-interval", type=float, default=1.0, help="seconds between system samples")
+    p.add_argument("--sample-interval", type=_sample_interval, default=1.0, help="seconds between system samples")
     a = p.parse_args()
     print(run_video(a.variant, a.clip, a.repeat, a.machine, a.out_dir, a.models_dir, a.sample_interval))
 

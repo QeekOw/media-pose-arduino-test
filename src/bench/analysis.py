@@ -1,6 +1,5 @@
 import argparse
 import re
-import statistics
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -8,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from bench.runfile import RunFile, read_run
+from bench.runfile import RunFile, Sample, read_run
 
 WARMUP_FRAMES = 30
 NO_STATUS = "failed: no status line"
@@ -58,13 +57,24 @@ IMPLAUSIBLE: list[tuple[str, Callable[[RunFile], bool]]] = [
     ("no samples", lambda run: not run.samples),
     ("temp 0 or out of range", lambda run: _any_reading(run, ("temp_c",), lambda t: t <= 0 or t > 125)),
     ("clock 0", lambda run: _any_reading(run, ("cpu_mhz",), lambda mhz: mhz <= 0)),
-    ("ram 0", lambda run: _any_reading(run, ("ram_used_mb", "rss_mb"), lambda mb: mb <= 0)),
+    ("ram 0", lambda run: _any_reading(run, ("ram_used_mb", "rss_mb", "rss_peak_mb"), lambda mb: mb <= 0)),
     ("cpu % out of range", lambda run: _any_reading(run, ("cpu_pct",), lambda pct: pct < 0 or pct > 100)),
 ]
 
 
-def _over(fn: Callable[[list], float], values: list) -> float | None:
+def _over[T](fn: Callable[[list[T]], T], values: list[T]) -> T | None:
     return fn(values) if values else None
+
+
+def avg_cpu_pct(samples: list[Sample]) -> float | None:
+    # Each cpu_pct covers the time since the previous sample, and the final one from stop() can cover only a few ms.
+    weighted = total_ms = 0
+    for prev, s in zip(samples, samples[1:]):
+        ms = s.t_ms - prev.t_ms
+        if s.cpu_pct is not None and ms > 0:
+            weighted += s.cpu_pct * ms
+            total_ms += ms
+    return weighted / total_ms if total_ms else None
 
 
 def status_text(run: RunFile) -> str:
@@ -96,9 +106,10 @@ def summarize(run: RunFile) -> RunSummary:
         fps=fps,
         avg_ms=avg_ms,
         p95_ms=p95_ms,
-        peak_rss_mb=_over(max, readings(run, "rss_mb")),
+        # rss_peak_mb is the kernel's exact high-water mark; files written before it existed only have polled rss_mb.
+        peak_rss_mb=_over(max, readings(run, "rss_peak_mb") or readings(run, "rss_mb")),
         peak_ram_used_mb=_over(max, readings(run, "ram_used_mb")),
-        avg_cpu_pct=_over(statistics.fmean, readings(run, "cpu_pct")),
+        avg_cpu_pct=avg_cpu_pct(run.samples),
         max_temp_c=_over(max, readings(run, "temp_c")),
         min_cpu_mhz=_over(min, readings(run, "cpu_mhz")),
         flags=tuple(name for name, implausible in IMPLAUSIBLE if implausible(run)),

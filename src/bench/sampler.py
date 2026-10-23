@@ -1,18 +1,10 @@
+import math
 import queue
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
-
-@dataclass(frozen=True)
-class Sample:
-    t_ms: int
-    cpu_pct: float | None
-    ram_used_mb: int | None
-    rss_mb: int | None
-    temp_c: float | None
-    cpu_mhz: int | None
+from bench.runfile import Sample
 
 
 def _fields(path: Path) -> dict[str, list[str]] | None:
@@ -34,10 +26,9 @@ def _cpu_times(proc: Path) -> tuple[int, int] | None:
     return total - idle, total
 
 
-def _kb_fields(path: Path, *names: str) -> list[int] | None:
+def _kb(fields: dict[str, list[str]] | None, name: str) -> int | None:
     try:
-        fields = _fields(path)
-        return [int(fields[n][0]) for n in names]
+        return int(fields[name][0])
     except (TypeError, KeyError, IndexError, ValueError):
         return None
 
@@ -54,7 +45,7 @@ def _temp_c(root: Path) -> float | None:
     for zone in sorted(root.glob("class/thermal/thermal_zone*")):
         try:
             kind = (zone / "type").read_text(encoding="utf-8").strip()
-        except OSError:
+        except (OSError, ValueError):
             kind = ""
         millideg = _read_int(zone / "temp")
         if millideg is not None:
@@ -73,6 +64,8 @@ def _cpu_mhz(root: Path) -> int | None:
 
 class Sampler:
     def __init__(self, interval_s: float = 1.0, proc_root: Path = Path("/proc"), sys_root: Path = Path("/sys")):
+        if not (math.isfinite(interval_s) and interval_s > 0):
+            raise ValueError(f"sample interval must be a finite number of seconds above 0, got {interval_s}")
         self.interval_s = interval_s
         self._proc = Path(proc_root)
         self._sys = Path(sys_root)
@@ -89,21 +82,30 @@ class Sampler:
             busy, total = cpu[0] - self._prev_cpu[0], cpu[1] - self._prev_cpu[1]
             if total > 0:
                 cpu_pct = 100.0 * busy / total
-        self._prev_cpu = cpu
-        mem = _kb_fields(self._proc / "meminfo", "MemTotal", "MemAvailable")
-        rss = _kb_fields(self._proc / "self" / "status", "VmRSS")
-        return Sample(
+        meminfo = _fields(self._proc / "meminfo")
+        mem_total, mem_available = _kb(meminfo, "MemTotal"), _kb(meminfo, "MemAvailable")
+        status = _fields(self._proc / "self" / "status")
+        rss, rss_peak = _kb(status, "VmRSS"), _kb(status, "VmHWM")
+        sample = Sample(
             t_ms=round((time.monotonic() - self._start) * 1000),
             cpu_pct=cpu_pct,
-            ram_used_mb=None if mem is None else (mem[0] - mem[1]) // 1024,
-            rss_mb=None if rss is None else rss[0] // 1024,
+            ram_used_mb=None if mem_total is None or mem_available is None else (mem_total - mem_available) // 1024,
+            rss_mb=None if rss is None else rss // 1024,
+            rss_peak_mb=None if rss_peak is None else rss_peak // 1024,
             temp_c=_temp_c(self._sys),
             cpu_mhz=_cpu_mhz(self._sys),
         )
+        # Set only once the sample exists, so cpu_pct always spans back to the previous recorded sample.
+        self._prev_cpu = cpu
+        return sample
 
     def _loop(self) -> None:
         while not self._stop.wait(self.interval_s):
-            self._queue.put(self._take())
+            try:
+                self._queue.put(self._take())
+            except Exception:
+                # One bad read skips its tick; letting it escape would end sampling for the rest of the Run.
+                pass
 
     def start(self) -> None:
         self._start = time.monotonic()
