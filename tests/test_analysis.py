@@ -6,7 +6,14 @@ from bench.analysis import analyze, main
 from bench.runfile import read_run
 
 
-def write_run(path, frame_ms, status="completed", variant="lite", clip="smoke.mp4", repeat=1, machine="board"):
+def sample(t_ms=0, cpu_pct=50.0, ram_used_mb=1000, rss_mb=200, temp_c=60.0, cpu_mhz=2016):
+    return {"type": "sample", "t_ms": t_ms, "cpu_pct": cpu_pct, "ram_used_mb": ram_used_mb, "rss_mb": rss_mb,
+            "temp_c": temp_c, "cpu_mhz": cpu_mhz}
+
+
+def write_run(
+    path, frame_ms, status="completed", variant="lite", clip="smoke.mp4", repeat=1, machine="board", samples=()
+):
     header = {
         "type": "header",
         "format_version": 1,
@@ -20,6 +27,7 @@ def write_run(path, frame_ms, status="completed", variant="lite", clip="smoke.mp
     lines = [header]
     for i, ms in enumerate(frame_ms):
         lines.append({"type": "frame", "index": i, "video_ms": ms / 4, "model_ms": ms * 3 / 4, "landmarks": None})
+    lines.extend(samples)
     if status is not None:
         lines.append({"type": "status", "status": status, "detail": ""})
     path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
@@ -240,3 +248,78 @@ def test_truncated_last_line_is_not_a_problem(tmp_path):
     assert parsed.problem is None
     assert parsed.status is None
     assert len(parsed.frames) == 60
+
+
+def test_killed_run_with_samples_but_no_status_is_failed(tmp_path):
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, status=None, samples=[sample(0), sample(1000)])
+
+    (s,) = analyze([run])
+
+    assert s.status == "failed: no status line"
+    assert s.peak_rss_mb == 200
+
+
+def test_system_readings_are_summarised_per_run(tmp_path):
+    samples = [
+        sample(0, cpu_pct=None, ram_used_mb=900, rss_mb=150, temp_c=55.0, cpu_mhz=2016),
+        sample(1000, cpu_pct=80.0, ram_used_mb=1200, rss_mb=310, temp_c=71.5, cpu_mhz=1500),
+        sample(2000, cpu_pct=90.0, ram_used_mb=1100, rss_mb=300, temp_c=None, cpu_mhz=None),
+        sample(3000, cpu_pct=100.0, ram_used_mb=None, rss_mb=None, temp_c=68.0, cpu_mhz=1800),
+    ]
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, samples=samples)
+
+    (s,) = analyze([run])
+
+    assert s.peak_rss_mb == 310
+    assert s.peak_ram_used_mb == 1200
+    assert s.avg_cpu_pct == pytest.approx(90.0)
+    assert s.max_temp_c == pytest.approx(71.5)
+    assert s.min_cpu_mhz == 1500
+    assert s.flags == ()
+
+
+def test_missing_readings_are_not_flagged_and_show_as_dashes(tmp_path, capsys):
+    blank = sample(0, cpu_pct=None, ram_used_mb=None, rss_mb=None, temp_c=None, cpu_mhz=None)
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, samples=[blank])
+
+    (s,) = analyze([run])
+    assert (s.peak_rss_mb, s.peak_ram_used_mb, s.avg_cpu_pct, s.max_temp_c, s.min_cpu_mhz) == (None,) * 5
+    assert s.flags == ()
+
+    assert main([str(run)]) == 0
+    row = capsys.readouterr().out.splitlines()[1].split()
+    assert row[-6:] == ["-"] * 6
+
+
+@pytest.mark.parametrize(
+    "frames, samples, flag",
+    [
+        ([], [sample()], "no frames"),
+        ([100] * 60, [], "no samples"),
+        ([100] * 60, [sample(temp_c=0.0)], "temp 0 or out of range"),
+        ([100] * 60, [sample(temp_c=130.0)], "temp 0 or out of range"),
+        ([100] * 60, [sample(cpu_mhz=0)], "clock 0"),
+        ([100] * 60, [sample(ram_used_mb=0)], "ram 0"),
+        ([100] * 60, [sample(rss_mb=0)], "ram 0"),
+        ([100] * 60, [sample(cpu_pct=-1.0)], "cpu % out of range"),
+        ([100] * 60, [sample(cpu_pct=100.5)], "cpu % out of range"),
+    ],
+)
+def test_implausible_readings_are_flagged(tmp_path, capsys, frames, samples, flag):
+    run = write_run(tmp_path / "a.jsonl", frames, samples=[sample(), *samples, sample()] if samples else [])
+
+    (s,) = analyze([run])
+
+    assert s.flags == (flag,)
+    assert main([str(run)]) == 0
+    assert flag in capsys.readouterr().out
+
+
+def test_clean_run_has_no_flags(tmp_path, capsys):
+    run = write_run(tmp_path / "a.jsonl", [100] * 60, samples=[sample(0), sample(1000, temp_c=125.0, cpu_pct=100.0)])
+
+    (s,) = analyze([run])
+
+    assert s.flags == ()
+    assert main([str(run)]) == 0
+    assert capsys.readouterr().out.splitlines()[1].endswith(" -")

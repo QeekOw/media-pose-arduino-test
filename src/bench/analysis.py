@@ -1,6 +1,8 @@
 import argparse
 import re
+import statistics
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +26,12 @@ class RunSummary:
     fps: float | None
     avg_ms: float | None
     p95_ms: float | None
+    peak_rss_mb: int | None
+    peak_ram_used_mb: int | None
+    avg_cpu_pct: float | None
+    max_temp_c: float | None
+    min_cpu_mhz: int | None
+    flags: tuple[str, ...]
 
     @property
     def has_numbers(self) -> bool:
@@ -35,6 +43,28 @@ def identity_from_name(path: Path) -> tuple[str, str, int, str]:
     if len(parts) == 5 and re.fullmatch(r"r\d+", parts[3]):
         return parts[1], parts[2], int(parts[3][1:]), parts[4]
     return "?", path.stem, 0, "?"
+
+
+def readings(run: RunFile, *fields: str) -> list:
+    return [v for s in run.samples for name in fields if (v := getattr(s, name)) is not None]
+
+
+def _any_reading(run: RunFile, fields: tuple[str, ...], bad: Callable[[float], bool]) -> bool:
+    return any(bad(v) for v in readings(run, *fields))
+
+
+IMPLAUSIBLE: list[tuple[str, Callable[[RunFile], bool]]] = [
+    ("no frames", lambda run: not run.frames),
+    ("no samples", lambda run: not run.samples),
+    ("temp 0 or out of range", lambda run: _any_reading(run, ("temp_c",), lambda t: t <= 0 or t > 125)),
+    ("clock 0", lambda run: _any_reading(run, ("cpu_mhz",), lambda mhz: mhz <= 0)),
+    ("ram 0", lambda run: _any_reading(run, ("ram_used_mb", "rss_mb"), lambda mb: mb <= 0)),
+    ("cpu % out of range", lambda run: _any_reading(run, ("cpu_pct",), lambda pct: pct < 0 or pct > 100)),
+]
+
+
+def _over(fn: Callable[[list], float], values: list) -> float | None:
+    return fn(values) if values else None
 
 
 def status_text(run: RunFile) -> str:
@@ -66,6 +96,12 @@ def summarize(run: RunFile) -> RunSummary:
         fps=fps,
         avg_ms=avg_ms,
         p95_ms=p95_ms,
+        peak_rss_mb=_over(max, readings(run, "rss_mb")),
+        peak_ram_used_mb=_over(max, readings(run, "ram_used_mb")),
+        avg_cpu_pct=_over(statistics.fmean, readings(run, "cpu_pct")),
+        max_temp_c=_over(max, readings(run, "temp_c")),
+        min_cpu_mhz=_over(min, readings(run, "cpu_mhz")),
+        flags=tuple(name for name, implausible in IMPLAUSIBLE if implausible(run)),
     )
 
 
@@ -86,16 +122,29 @@ def analyze(paths: list[str | Path]) -> list[RunSummary]:
     return sorted(summaries, key=lambda s: (s.variant, s.clip, s.repeat, s.machine))
 
 
+def _cell(value, fmt: str = "{}") -> str:
+    return "-" if value is None else fmt.format(value)
+
+
 def format_table(summaries: list[RunSummary]) -> str:
     headers = ["variant", "clip", "repeat", "machine", "status", "frames", "kept", "FPS", "avg ms", "p95 ms"]
+    headers += ["peak RSS MB", "peak RAM MB", "avg CPU %", "max temp C", "min MHz", "flags"]
     rows = []
     for s in summaries:
         if s.has_numbers:
             numbers = [f"{s.fps:.2f}", f"{s.avg_ms:.1f}", f"{s.p95_ms:.1f}"]
         else:
             numbers = [f"too few frames (need {WARMUP_FRAMES + 1})", "-", "-"]
+        system = [
+            _cell(s.peak_rss_mb),
+            _cell(s.peak_ram_used_mb),
+            _cell(s.avg_cpu_pct, "{:.1f}"),
+            _cell(s.max_temp_c, "{:.1f}"),
+            _cell(s.min_cpu_mhz),
+            ", ".join(s.flags) or "-",
+        ]
         rows.append(
-            [s.variant, s.clip, str(s.repeat), s.machine, s.status, str(s.frames), str(s.kept_frames), *numbers]
+            [s.variant, s.clip, str(s.repeat), s.machine, s.status, str(s.frames), str(s.kept_frames), *numbers, *system]
         )
     widths = [max(len(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
     lines = ["  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip() for r in [headers, *rows]]
