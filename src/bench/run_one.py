@@ -5,6 +5,7 @@
 import argparse
 import json
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from mediapipe.tasks.python import vision
 
 from bench.envinfo import default_machine_name, machine_info, software_info
 from bench.models import VARIANTS, ensure_model
+from bench.sampler import Sampler
 
 
 def _landmarks(result) -> list | None:
@@ -23,7 +25,9 @@ def _landmarks(result) -> list | None:
     return [[lm.x, lm.y, lm.z, lm.visibility] for lm in result.pose_landmarks[0]]
 
 
-def run_video(variant: str, clip: Path, repeat: int, machine: str, out_dir: Path, models_dir: Path) -> Path:
+def run_video(
+    variant: str, clip: Path, repeat: int, machine: str, out_dir: Path, models_dir: Path, sample_interval: float
+) -> Path:
     model = ensure_model(variant, models_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"video__{variant}__{clip.stem}__r{repeat}__{machine}.jsonl"
@@ -37,6 +41,10 @@ def run_video(variant: str, clip: Path, repeat: int, machine: str, out_dir: Path
         def write(obj: dict) -> None:
             f.write(json.dumps(obj) + "\n")
             f.flush()
+
+        def write_samples() -> None:
+            for sample in sampler.drain():
+                write({"type": "sample", **asdict(sample)})
 
         write({
             "type": "header",
@@ -56,6 +64,9 @@ def run_video(variant: str, clip: Path, repeat: int, machine: str, out_dir: Path
                 "frame_count": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
             },
         })
+        # The sampler thread only queues; this thread stays the Run file's only writer.
+        sampler = Sampler(sample_interval)
+        sampler.start()
         status, detail = "crashed", "interrupted"
         try:
             options = vision.PoseLandmarkerOptions(
@@ -81,6 +92,7 @@ def run_video(variant: str, clip: Path, repeat: int, machine: str, out_dir: Path
                         "model_ms": (t2 - t1) * 1000,
                         "landmarks": _landmarks(result),
                     })
+                    write_samples()
                     index += 1
             expected = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if 0 < expected and index < expected:
@@ -93,6 +105,8 @@ def run_video(variant: str, clip: Path, repeat: int, machine: str, out_dir: Path
             status, detail = "crashed", repr(e)
         finally:
             cap.release()
+            sampler.stop()
+            write_samples()
             write({"type": "status", "status": status, "detail": detail})
     return out_path
 
@@ -105,8 +119,9 @@ def main() -> None:
     p.add_argument("--machine", default=default_machine_name())
     p.add_argument("--out-dir", type=Path, default=Path("runs"))
     p.add_argument("--models-dir", type=Path, default=Path("models"))
+    p.add_argument("--sample-interval", type=float, default=1.0, help="seconds between system samples")
     a = p.parse_args()
-    print(run_video(a.variant, a.clip, a.repeat, a.machine, a.out_dir, a.models_dir))
+    print(run_video(a.variant, a.clip, a.repeat, a.machine, a.out_dir, a.models_dir, a.sample_interval))
 
 
 if __name__ == "__main__":
