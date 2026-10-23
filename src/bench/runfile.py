@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from bench.sampler import Sample
+
 
 @dataclass(frozen=True)
 class Header:
@@ -38,6 +40,7 @@ class RunFile:
     path: Path
     header: Header | None
     frames: list[Frame]
+    samples: list[Sample]
     status: str | None
     problem: str | None
 
@@ -48,6 +51,7 @@ def read_run(path: str | Path) -> RunFile:
     lines = [(n, ln) for n, ln in enumerate(text.splitlines(), 1) if ln.strip()]
     header = None
     frames: list[Frame] = []
+    samples: list[Sample] = []
     status = None
     problem = None
     for pos, (number, line) in enumerate(lines):
@@ -76,6 +80,17 @@ def read_run(path: str | Path) -> RunFile:
                         landmarks=record.get("landmarks"),
                     )
                 )
+            elif kind == "sample":
+                samples.append(
+                    Sample(
+                        t_ms=record["t_ms"],
+                        cpu_pct=record.get("cpu_pct"),
+                        ram_used_mb=record.get("ram_used_mb"),
+                        rss_mb=record.get("rss_mb"),
+                        temp_c=record.get("temp_c"),
+                        cpu_mhz=record.get("cpu_mhz"),
+                    )
+                )
             elif kind == "status":
                 status = record["status"]
         except json.JSONDecodeError:
@@ -88,4 +103,4 @@ def read_run(path: str | Path) -> RunFile:
             break
     if header is None and problem is None:
         problem = "no header line"
-    return RunFile(path=path, header=header, frames=frames, status=status, problem=problem)
+    return RunFile(path=path, header=header, frames=frames, samples=samples, status=status, problem=problem)

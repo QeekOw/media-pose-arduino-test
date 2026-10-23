@@ -7,11 +7,10 @@ Version 1. Name files `<phase>__<variant>__<clip>__r<repeat>__<machine>.jsonl`.
 ## Line order
 
 1. one `header` line (first),
-2. any number of `frame` lines, in frame order,
-3. any number of `sample` lines (reserved, written from ticket 5 on),
-4. one `status` line (last, written on every exit the process can catch).
+2. any number of `frame` lines, in frame order, with `sample` lines interleaved between them,
+3. one `status` line (last, written on every exit the process can catch).
 
-A Run file with no `status` line counts as failed.
+A Run file with no `status` line counts as failed. On Linux an out-of-memory kill is a SIGKILL the process cannot catch, so it leaves no `status` line and Analysis shows the Run as `failed: no status line`. Recording `oom` from the parent process belongs to the Campaign ticket (#7).
 
 ## `header`
 
@@ -56,7 +55,20 @@ Frame time is `video_ms + model_ms`.
 
 ## `sample`
 
-Reserved. `{"type": "sample", "t_ms": 1000, "cpu_pct": 87.0, "ram_used_mb": 1100, "temp_c": 62.5, "cpu_mhz": 2016}`.
+```json
+{"type": "sample", "t_ms": 1000, "cpu_pct": 87.0, "ram_used_mb": 1100, "rss_mb": 310, "temp_c": 62.5, "cpu_mhz": 2016}
+```
+
+A background thread reads the system at a fixed interval (`--sample-interval`, default 1 s), plus once at the start and once at the end of the Run. The main thread writes the queued samples after each frame and before the `status` line, so it stays the only writer.
+
+- `t_ms` is milliseconds since sampling started.
+- `cpu_pct` is system-wide CPU busy percent since the previous sample, from the `cpu` line of `/proc/stat`. It is `null` in the first sample.
+- `ram_used_mb` is `MemTotal - MemAvailable` from `/proc/meminfo`.
+- `rss_mb` is the Run process's resident memory (`VmRSS` in `/proc/self/status`).
+- `temp_c` is the highest `/sys/class/thermal/thermal_zone*/temp` over zones whose `type` starts with `cpu` (on the Board `cpuss0-thermal` and `cpuss1-thermal`), or over all zones when none does.
+- `cpu_mhz` is the highest `scaling_cur_freq` across cores. Idle cores clock down on their own, but a thermal throttle caps every core, so the highest one shows the throttle.
+
+Any value the machine cannot provide is `null`. The Dev machine (Windows) has none of these files, so every reading in its samples is `null`.
 
 ## `status`
 
