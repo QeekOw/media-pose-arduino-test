@@ -40,7 +40,7 @@ def _read_int(path: Path) -> int | None:
         return None
 
 
-def _temp_c(root: Path) -> float | None:
+def read_temp_c(root: Path = Path("/sys")) -> float | None:
     zones = []
     for zone in sorted(root.glob("class/thermal/thermal_zone*")):
         try:
@@ -92,7 +92,7 @@ class Sampler:
             ram_used_mb=None if mem_total is None or mem_available is None else (mem_total - mem_available) // 1024,
             rss_mb=None if rss is None else rss // 1024,
             rss_peak_mb=None if rss_peak is None else rss_peak // 1024,
-            temp_c=_temp_c(self._sys),
+            temp_c=read_temp_c(self._sys),
             cpu_mhz=_cpu_mhz(self._sys),
         )
         # Set only once the sample exists, so cpu_pct always spans back to the previous recorded sample.

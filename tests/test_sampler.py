@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from bench.sampler import Sampler
+from bench.sampler import Sampler, read_temp_c
 
 
 def write_tree(root, stat="cpu  100 0 100 700 100 0 0 0 50 0\ncpu0 50 0 50 350 50 0 0 0 25 0\n", zones=None):
@@ -100,3 +100,10 @@ def test_undecodable_zone_type_still_gives_a_sample(tmp_path):
 def test_rejects_an_interval_that_is_not_finite_and_positive(interval_s):
     with pytest.raises(ValueError):
         Sampler(interval_s=interval_s)
+
+
+def test_read_temp_c_is_the_hottest_cpu_zone_or_none(tmp_path):
+    _, sys = write_tree(tmp_path)
+
+    assert read_temp_c(sys) == pytest.approx(63.2)
+    assert read_temp_c(tmp_path / "no-sys") is None
