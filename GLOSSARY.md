@@ -28,6 +28,10 @@ _Avoid_: video, sample, test video
 One Model variant processing one clip from start to finish on the Board. Each pairing of Model variant and clip is repeated as several Runs.
 _Avoid_: trial, test, iteration
 
+**Campaign**:
+One Run plan executed unattended on the Board: every Model variant on every Clip, repeated, in shuffled order with the seed recorded, with the Board cooled between Runs. Its Run files and a log of the order and cool-down waits come back to the Dev machine together.
+_Avoid_: batch, suite
+
 **Reference landmarks**:
 The landmarks produced by Heavy running on the Dev machine, used as the stand-in for correct answers when scoring a Run's accuracy. They are a stand-in, not ground truth.
 _Avoid_: ground truth, labels, correct answers

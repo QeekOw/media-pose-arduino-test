@@ -10,7 +10,9 @@ Version 1. Name files `<phase>__<variant>__<clip>__r<repeat>__<machine>.jsonl`.
 2. any number of `frame` lines, in frame order, with `sample` lines interleaved between them,
 3. one `status` line (last, written on every exit the process can catch).
 
-A Run file with no `status` line counts as failed. On Linux an out-of-memory kill is a SIGKILL the process cannot catch, so it leaves no `status` line and Analysis shows the Run as `failed: no status line`. Recording `oom` from the parent process belongs to the Campaign ticket (#7).
+A Run file with no `status` line counts as failed. On Linux an out-of-memory kill is a SIGKILL the process cannot catch, so a Run started on its own with `bench.run_one` leaves no `status` line and Analysis shows it as `failed: no status line`.
+
+A Campaign (`python -m bench.campaign`) starts every Run as a child process and settles the file afterwards. When the file has no `status` line, the Campaign appends one: `oom` if the child was killed with SIGKILL (exit code -9), otherwise `crashed`. `detail` holds the exit code or signal and the last 500 characters of the child's stderr. A child that outlives `--run-timeout` is killed and recorded as `crashed` with detail `timed out after N s`. A half-written last line is cut before the status line is appended. If the child died before creating its file, the Campaign creates it containing only the `status` line. Analysis then shows the Run as `failed: no header line` with its variant, clip and repeat taken from the file name.
 
 ## `header`
 
