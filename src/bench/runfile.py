@@ -3,6 +3,10 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 
+def run_file_name(variant: str, clip_stem: str, repeat: int, machine: str, phase: str = "video") -> str:
+    return f"{phase}__{variant}__{clip_stem}__r{repeat}__{machine}.jsonl"
+
+
 @dataclass(frozen=True)
 class Header:
     format_version: int

@@ -17,6 +17,7 @@ from mediapipe.tasks.python import vision
 
 from bench.envinfo import default_machine_name, machine_info, software_info
 from bench.models import VARIANTS, ensure_model
+from bench.runfile import run_file_name
 from bench.sampler import Sampler
 
 
@@ -38,7 +39,7 @@ def run_video(
 ) -> Path:
     model = ensure_model(variant, models_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"video__{variant}__{clip.stem}__r{repeat}__{machine}.jsonl"
+    out_path = out_dir / run_file_name(variant, clip.stem, repeat, machine)
 
     cap = cv2.VideoCapture(str(clip))
     if not cap.isOpened():
