@@ -36,6 +36,8 @@ class RunSummary:
     false_detection_rate: float | None
     jitter: float | None
     flags: tuple[str, ...]
+    frame_ms: tuple[float, ...]
+    temps: tuple[tuple[int, float], ...]
 
     @property
     def has_numbers(self) -> bool:
@@ -148,6 +150,8 @@ def summarize(run: RunFile, references: dict[str, list[Frame]] | None = None) ->
         false_detection_rate=quality.false_detection_rate,
         jitter=quality.jitter,
         flags=tuple(name for name, implausible in IMPLAUSIBLE if implausible(run)),
+        frame_ms=tuple(f.frame_ms for f in kept),
+        temps=tuple((s.t_ms, s.temp_c) for s in run.samples if s.temp_c is not None),
     )
 
 
