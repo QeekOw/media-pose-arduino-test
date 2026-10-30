@@ -3,7 +3,7 @@ import json
 import pytest
 
 from bench.analysis import WARMUP_FRAMES, analyze
-from bench.report import NONE_PASSED, format_verdicts, main, spread, summary_table, verdicts
+from bench.report import CLIPS, NONE_PASSED, format_verdicts, main, spread, summary_table, verdicts
 
 POSE = [[0.3 + i * 0.01, 0.2 + i * 0.015, 0.0, 1.0] for i in range(33)]
 
@@ -30,8 +30,13 @@ def write_run(
     return path
 
 
+def write_campaign(dir_, **run):
+    for clip in CLIPS:
+        write_run(dir_, clip=clip, **run)
+
+
 def verdict_for(tmp_path, **run):
-    write_run(tmp_path, **run)
+    write_campaign(tmp_path, **run)
     (v,) = verdicts(analyze([tmp_path]))
     return v
 
@@ -44,7 +49,7 @@ def test_a_variant_meeting_every_rule_passes(tmp_path):
     v = verdict_for(tmp_path)
 
     assert v.passed
-    assert format_verdicts([v]).splitlines()[0] == "lite: PASS (1 Run)"
+    assert format_verdicts([v]).splitlines()[0] == "lite: PASS (5 Runs)"
 
 
 @pytest.mark.parametrize(("frame_ms", "passed"), [(100.0, True), (100.5, False)])
@@ -70,7 +75,7 @@ def test_detection_passes_at_90_percent_and_fails_below(tmp_path, detected, pass
 
 
 def test_empty_room_clip_does_not_count_against_detection(tmp_path):
-    write_run(tmp_path, clip="front", detected=100)
+    write_campaign(tmp_path, detected=100)
     write_run(tmp_path, clip="empty", detected=0)
 
     (v,) = verdicts(analyze([tmp_path]))
@@ -79,19 +84,20 @@ def test_empty_room_clip_does_not_count_against_detection(tmp_path):
 
 
 def test_rules_apply_to_all_runs_of_a_variant_together(tmp_path):
-    write_run(tmp_path, clip="front", repeat=1, frame_ms=80.0)
-    write_run(tmp_path, clip="side", repeat=1, frame_ms=115.0)
+    write_campaign(tmp_path, frame_ms=100.0)
+    write_run(tmp_path, clip="front", frame_ms=80.0)
+    write_run(tmp_path, clip="side", frame_ms=115.0)
 
     (v,) = verdicts(analyze([tmp_path]))
 
-    assert v.runs == 2
+    assert v.runs == 5
     assert v.passed
 
 
 @pytest.mark.parametrize("status", ["crashed", "oom", None])
 def test_one_failed_run_fails_its_variant(tmp_path, status):
-    write_run(tmp_path, repeat=1)
-    write_run(tmp_path, repeat=2)
+    write_campaign(tmp_path, repeat=1)
+    write_campaign(tmp_path, repeat=2)
     write_run(tmp_path, repeat=3, status=status)
 
     (v,) = verdicts(analyze([tmp_path]))
@@ -106,18 +112,28 @@ def test_every_failed_rule_is_named(tmp_path):
     text = format_verdicts([v])
 
     assert text.splitlines()[:5] == [
-        "lite: FAIL (1 Run)",
+        "lite: FAIL (5 Runs)",
         "  fails: average FPS at least 10 (5.0 FPS)",
         "  fails: slowest-5% frame time at most 150 ms (200 ms)",
         "  fails: detection at least 90% on Clips with a person (50.0%)",
-        "  fails: no failed Runs (1 failed)",
+        "  fails: no failed Runs (5 failed)",
     ]
 
 
+def test_a_variant_missing_a_campaign_clip_fails(tmp_path):
+    for clip in ("front", "side", "fast"):
+        write_run(tmp_path, clip=clip)
+
+    (v,) = verdicts(analyze([tmp_path]))
+
+    assert failed_names(v) == ["Runs on all five Campaign Clips"]
+    assert "fails: Runs on all five Campaign Clips (3 of 5)" in format_verdicts([v])
+
+
 def test_no_variant_passed_says_webcam_phase_falls_back_to_lite(tmp_path):
-    write_run(tmp_path, variant="lite", frame_ms=120.0)
-    write_run(tmp_path, variant="full", frame_ms=200.0)
-    write_run(tmp_path, variant="heavy", status="oom")
+    write_campaign(tmp_path, variant="lite", frame_ms=120.0)
+    write_campaign(tmp_path, variant="full", frame_ms=200.0)
+    write_campaign(tmp_path, variant="heavy", status="oom")
 
     text = format_verdicts(verdicts(analyze([tmp_path])))
 
@@ -135,8 +151,8 @@ def test_variants_without_board_runs_are_named_and_hold_back_the_finding(tmp_pat
 
 
 def test_message_is_absent_when_one_variant_passes(tmp_path):
-    write_run(tmp_path, variant="lite", frame_ms=50.0)
-    write_run(tmp_path, variant="full", frame_ms=200.0)
+    write_campaign(tmp_path, variant="lite", frame_ms=50.0)
+    write_campaign(tmp_path, variant="full", frame_ms=200.0)
 
     text = format_verdicts(verdicts(analyze([tmp_path])))
 
@@ -145,13 +161,13 @@ def test_message_is_absent_when_one_variant_passes(tmp_path):
 
 
 def test_laptop_and_smoke_runs_do_not_count_toward_verdicts(tmp_path):
-    write_run(tmp_path, frame_ms=50.0)
+    write_campaign(tmp_path, frame_ms=50.0)
     write_run(tmp_path, machine="dev", status="crashed")
     write_run(tmp_path, clip="smoke", status="crashed")
 
     (v,) = verdicts(analyze([tmp_path]))
 
-    assert v.runs == 1
+    assert v.runs == 5
     assert v.passed
 
 
@@ -175,8 +191,8 @@ def test_spread_reports_fps_range_across_repeats(tmp_path):
 
 
 def test_summary_table_puts_board_and_laptop_side_by_side(tmp_path):
-    write_run(tmp_path, machine="board", frame_ms=100.0)
-    write_run(tmp_path, machine="dev", frame_ms=20.0)
+    write_campaign(tmp_path, machine="board", frame_ms=100.0)
+    write_campaign(tmp_path, machine="dev", frame_ms=20.0)
 
     headers, rows = summary_table(analyze([tmp_path]))
 
@@ -191,7 +207,7 @@ def test_main_prints_verdicts_and_writes_charts(tmp_path, capsys):
     runs.mkdir()
     for machine in ("board", "dev"):
         for variant in ("lite", "heavy"):
-            write_run(runs, variant=variant, machine=machine)
+            write_campaign(runs, variant=variant, machine=machine)
 
     assert main([str(runs), "--out-dir", str(tmp_path / "out")]) == 0
 

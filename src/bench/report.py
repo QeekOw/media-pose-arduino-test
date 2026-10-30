@@ -28,6 +28,10 @@ def failed_runs(runs: list[RunSummary]) -> int:
     return sum(r.status != "completed" for r in runs)
 
 
+def clips_covered(runs: list[RunSummary]) -> int:
+    return len({clip_stem(r.clip) for r in runs} & set(CLIPS))
+
+
 def pooled_fps(runs: list[RunSummary]) -> float | None:
     times = [ms for r in runs for ms in r.frame_ms]
     return len(times) / (sum(times) / 1000.0) if times else None
@@ -65,6 +69,7 @@ RULES = (
     Rule("slowest-5% frame time at most 150 ms", pooled_p95_ms, operator.le, 150.0, "{:.0f} ms"),
     Rule("detection at least 90% on Clips with a person", pooled_detection_rate, operator.ge, 90.0, "{:.1f}%"),
     Rule("no failed Runs", failed_runs, operator.le, 0, "{} failed"),
+    Rule("Runs on all five Campaign Clips", clips_covered, operator.ge, len(CLIPS), "{} of 5"),
 )
 
 
