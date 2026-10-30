@@ -3,14 +3,14 @@ import json
 import pytest
 
 from bench.analysis import WARMUP_FRAMES, analyze
-from bench.report import CLIPS, NONE_PASSED, format_verdicts, main, spread, summary_table, verdicts
+from bench.report import CLIPS, NONE_PASSED, REPEATS, pooled_pck, format_verdicts, main, spread, summary_table, verdicts
 
 POSE = [[0.3 + i * 0.01, 0.2 + i * 0.015, 0.0, 1.0] for i in range(33)]
 
 
 def write_run(
     dir_, variant="lite", clip="front", repeat=1, machine="board", frame_ms=100.0, frames=100, detected=100,
-    status="completed",
+    status="completed", pose=POSE,
 ):
     """A Run whose kept frames (after warm-up) all take frame_ms, and the first `detected` percent of them have a pose."""
     lines = [{"type": "header", "format_version": 1, "phase": "video", "variant": variant, "clip": f"{clip}.mp4",
@@ -21,7 +21,7 @@ def write_run(
         kept = i - WARMUP_FRAMES
         ms = frame_ms[kept] if isinstance(frame_ms, list) and kept >= 0 else frame_ms if kept >= 0 else 500.0
         lines.append({"type": "frame", "index": i, "video_ms": 0.0, "model_ms": ms,
-                      "landmarks": POSE if kept < found else None})
+                      "landmarks": pose if kept < found else None})
     lines.append({"type": "sample", "t_ms": 0, "cpu_pct": 50.0, "temp_c": 60.0})
     if status is not None:
         lines.append({"type": "status", "status": status, "detail": ""})
@@ -32,7 +32,8 @@ def write_run(
 
 def write_campaign(dir_, **run):
     for clip in CLIPS:
-        write_run(dir_, clip=clip, **run)
+        for repeat in range(1, REPEATS + 1):
+            write_run(dir_, clip=clip, repeat=repeat, **run)
 
 
 def verdict_for(tmp_path, **run):
@@ -49,7 +50,7 @@ def test_a_variant_meeting_every_rule_passes(tmp_path):
     v = verdict_for(tmp_path)
 
     assert v.passed
-    assert format_verdicts([v]).splitlines()[0] == "lite: PASS (5 Runs)"
+    assert format_verdicts([v]).splitlines()[0] == "lite: PASS (15 Runs)"
 
 
 @pytest.mark.parametrize(("frame_ms", "passed"), [(100.0, True), (100.5, False)])
@@ -90,14 +91,13 @@ def test_rules_apply_to_all_runs_of_a_variant_together(tmp_path):
 
     (v,) = verdicts(analyze([tmp_path]))
 
-    assert v.runs == 5
+    assert v.runs == 15
     assert v.passed
 
 
 @pytest.mark.parametrize("status", ["crashed", "oom", None])
 def test_one_failed_run_fails_its_variant(tmp_path, status):
-    write_campaign(tmp_path, repeat=1)
-    write_campaign(tmp_path, repeat=2)
+    write_campaign(tmp_path)
     write_run(tmp_path, repeat=3, status=status)
 
     (v,) = verdicts(analyze([tmp_path]))
@@ -112,22 +112,32 @@ def test_every_failed_rule_is_named(tmp_path):
     text = format_verdicts([v])
 
     assert text.splitlines()[:5] == [
-        "lite: FAIL (5 Runs)",
+        "lite: FAIL (15 Runs)",
         "  fails: average FPS at least 10 (5.0 FPS)",
         "  fails: slowest-5% frame time at most 150 ms (200 ms)",
         "  fails: detection at least 90% on Clips with a person (50.0%)",
-        "  fails: no failed Runs (5 failed)",
+        "  fails: no failed Runs (15 failed)",
     ]
 
 
 def test_a_variant_missing_a_campaign_clip_fails(tmp_path):
     for clip in ("front", "side", "fast"):
-        write_run(tmp_path, clip=clip)
+        for repeat in range(1, REPEATS + 1):
+            write_run(tmp_path, clip=clip, repeat=repeat)
 
     (v,) = verdicts(analyze([tmp_path]))
 
-    assert failed_names(v) == ["Runs on all five Campaign Clips"]
-    assert "fails: Runs on all five Campaign Clips (3 of 5)" in format_verdicts([v])
+    assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]
+    assert "fails: 3 Runs on each of the five Campaign Clips (fewest on one Clip: 0)" in format_verdicts([v])
+
+
+def test_a_variant_short_of_three_repeats_on_one_clip_fails(tmp_path):
+    write_campaign(tmp_path)
+    (tmp_path / "video__lite__far__r3__board.jsonl").unlink()
+
+    (v,) = verdicts(analyze([tmp_path]))
+
+    assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]
 
 
 def test_no_variant_passed_says_webcam_phase_falls_back_to_lite(tmp_path):
@@ -167,7 +177,7 @@ def test_laptop_and_smoke_runs_do_not_count_toward_verdicts(tmp_path):
 
     (v,) = verdicts(analyze([tmp_path]))
 
-    assert v.runs == 5
+    assert v.runs == 15
     assert v.passed
 
 
@@ -216,3 +226,14 @@ def test_main_prints_verdicts_and_writes_charts(tmp_path, capsys):
     assert "Spread across repeats" in out
     images = sorted(p.name for p in (tmp_path / "out").iterdir())
     assert images == ["accuracy-vs-speed.png", "fps.png", "frame-times.png", "summary-table.png", "temperature.png"]
+
+
+def test_pooled_pck_weights_each_run_by_the_landmarks_it_was_scored_on(tmp_path):
+    write_run(tmp_path, variant="heavy", machine="dev")
+    write_run(tmp_path, repeat=1, detected=100)
+    write_run(tmp_path, repeat=2, detected=10, pose=[[x + 0.5, y, z, v] for x, y, z, v in POSE])
+
+    board = [s for s in analyze([tmp_path]) if s.machine == "board"]
+
+    assert [s.pck for s in board] == [pytest.approx(100.0), pytest.approx(0.0)]
+    assert pooled_pck(board) == pytest.approx(100.0 * 100 / 110)

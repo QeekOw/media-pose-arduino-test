@@ -19,6 +19,7 @@ from bench.quality import clip_stem
 BOARD = "board"
 LAPTOP = "dev"
 CLIPS = ("front", "side", "fast", "far", "empty")
+REPEATS = 3
 NONE_PASSED = (
     'No Model variant passed the Pass criteria, so the Webcam phase falls back to an "as-is" Lite demo.'
 )
@@ -28,8 +29,9 @@ def failed_runs(runs: list[RunSummary]) -> int:
     return sum(r.status != "completed" for r in runs)
 
 
-def clips_covered(runs: list[RunSummary]) -> int:
-    return len({clip_stem(r.clip) for r in runs} & set(CLIPS))
+def fewest_runs_on_a_clip(runs: list[RunSummary]) -> int:
+    clips = [clip_stem(r.clip) for r in runs]
+    return min(clips.count(clip) for clip in CLIPS)
 
 
 def pooled_fps(runs: list[RunSummary]) -> float | None:
@@ -50,9 +52,10 @@ def pooled_detection_rate(runs: list[RunSummary]) -> float | None:
 
 
 def pooled_pck(runs: list[RunSummary]) -> float | None:
-    weighted = [(r.pck, r.kept_frames) for r in runs if r.pck is not None]
-    frames = sum(n for _, n in weighted)
-    return sum(pck * n for pck, n in weighted) / frames if frames else None
+    """Percent of all compared landmarks within the PCK threshold, so each Run counts by the landmarks it was scored on."""
+    weighted = [(r.pck, r.pck_landmarks) for r in runs if r.pck is not None]
+    landmarks = sum(n for _, n in weighted)
+    return sum(pck * n for pck, n in weighted) / landmarks if landmarks else None
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,7 @@ RULES = (
     Rule("slowest-5% frame time at most 150 ms", pooled_p95_ms, operator.le, 150.0, "{:.0f} ms"),
     Rule("detection at least 90% on Clips with a person", pooled_detection_rate, operator.ge, 90.0, "{:.1f}%"),
     Rule("no failed Runs", failed_runs, operator.le, 0, "{} failed"),
-    Rule("Runs on all five Campaign Clips", clips_covered, operator.ge, len(CLIPS), "{} of 5"),
+    Rule("3 Runs on each of the five Campaign Clips", fewest_runs_on_a_clip, operator.ge, REPEATS, "fewest on one Clip: {}"),
 )
 
 

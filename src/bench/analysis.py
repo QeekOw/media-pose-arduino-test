@@ -32,6 +32,7 @@ class RunSummary:
     max_temp_c: float | None
     min_cpu_mhz: int | None
     pck: float | None
+    pck_landmarks: int
     detection_rate: float | None
     false_detection_rate: float | None
     jitter: float | None
@@ -146,6 +147,7 @@ def summarize(run: RunFile, references: dict[str, list[Frame]] | None = None) ->
         max_temp_c=_over(max, readings(run, "temp_c")),
         min_cpu_mhz=_over(min, readings(run, "cpu_mhz")),
         pck=quality.pck,
+        pck_landmarks=quality.pck_landmarks,
         detection_rate=quality.detection_rate,
         false_detection_rate=quality.false_detection_rate,
         jitter=quality.jitter,
