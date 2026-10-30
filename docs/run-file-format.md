@@ -84,4 +84,14 @@ Every reading is a number or `null`, and `t_ms` is an integer. Any value the mac
 
 ## Unreadable Run files
 
-Analysis never aborts on a bad Run file. An empty file, a missing header, an unparseable line (anywhere but a truncated last line), or a `sample` line with a value of the wrong type makes that Run a failed row, shown as `failed: no header line` or `failed: corrupt line N`. Frames read before the bad line are kept, and a status line after a bad line is ignored. When the header is missing, variant, clip, repeat and machine come from the file name, which is why the name pattern above matters.
+Analysis never aborts on a bad Run file. An empty file, a missing header, an unparseable line (anywhere but a truncated last line), or a `sample` line with a value of the wrong type, or a `frame` line whose `landmarks` are not `null` or 33 entries of four numbers, makes that Run a failed row, shown as `failed: no header line` or `failed: corrupt line N`. Frames read before the bad line are kept, and a status line after a bad line is ignored. When the header is missing, variant, clip, repeat and machine come from the file name, which is why the name pattern above matters.
+
+## Quality metrics
+
+Analysis scores the landmarks of every Run on the frames left after the 30 warm-up frames. Distances are taken in pixels (the normalised x and y times the `clip_info` width and height) and divided by torso length, the distance from the midpoint of the shoulders (landmarks 11 and 12) to the midpoint of the hips (23 and 24).
+
+- **Reference landmarks** are the lowest-numbered completed `heavy` Run on `dev` for each Clip. Generate them with `scripts/run-laptop-baseline.ps1`, which writes the whole Laptop baseline to `runs/dev/`. Give Analysis that directory next to the Board's, as in `uv run python -m bench.analysis runs/dev runs/board`.
+- **PCK@0.2** is the percentage of landmarks within 0.2 torso lengths of the reference, using the reference's torso, over frames where both the Run and the reference found a pose. It is `-` for a Clip with no reference. Heavy on `dev` scores 100% against itself.
+- **Detection rate** is the percentage of frames with a pose, on every Clip except `empty`.
+- **False detections** is the same percentage on `empty`, where any pose is wrong. The two are never mixed.
+- **Jitter** is the mean landmark movement between consecutive frames, in torso lengths, on `front` only. A frame without a pose breaks the chain, so movement is never measured across it.
