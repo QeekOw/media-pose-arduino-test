@@ -166,7 +166,8 @@ def find_run_files(paths: list[str | Path]) -> list[Path]:
             files.append(p)
         else:
             raise FileNotFoundError(p)
-    return files
+    # Overlapping arguments (a directory twice, or a directory and a file in it) must not count one Run twice.
+    return list({f.resolve(): f for f in files}.values())
 
 
 def analyze(paths: list[str | Path]) -> list[RunSummary]:

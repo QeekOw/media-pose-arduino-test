@@ -237,3 +237,13 @@ def test_pooled_pck_weights_each_run_by_the_landmarks_it_was_scored_on(tmp_path)
 
     assert [s.pck for s in board] == [pytest.approx(100.0), pytest.approx(0.0)]
     assert pooled_pck(board) == pytest.approx(100.0 * 100 / 110)
+
+
+def test_overlapping_inputs_count_each_run_file_once(tmp_path):
+    for clip in CLIPS:
+        write_run(tmp_path, clip=clip)
+
+    (v,) = verdicts(analyze([tmp_path, tmp_path, tmp_path / "video__lite__front__r1__board.jsonl"]))
+
+    assert v.runs == 5
+    assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]
