@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+LANDMARK_COUNT = 33
+
 
 def run_file_name(variant: str, clip_stem: str, repeat: int, machine: str, phase: str = "video") -> str:
     return f"{phase}__{variant}__{clip_stem}__r{repeat}__{machine}.jsonl"
@@ -64,6 +66,16 @@ def _sample(record: dict) -> Sample:
     return Sample(t_ms=t_ms, **readings)
 
 
+def _landmarks(value: list | None) -> list[list[float]] | None:
+    if value is None:
+        return None
+    if len(value) != LANDMARK_COUNT or any(
+        len(point) != 4 or any(type(c) not in (int, float) for c in point) for point in value
+    ):
+        raise TypeError(f"landmarks are not {LANDMARK_COUNT} [x, y, z, visibility] entries")
+    return value
+
+
 @dataclass(frozen=True)
 class RunFile:
     path: Path
@@ -107,7 +119,7 @@ def read_run(path: str | Path) -> RunFile:
                         index=record["index"],
                         video_ms=record["video_ms"],
                         model_ms=record["model_ms"],
-                        landmarks=record.get("landmarks"),
+                        landmarks=_landmarks(record.get("landmarks")),
                     )
                 )
             elif kind == "sample":

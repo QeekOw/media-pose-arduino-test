@@ -288,7 +288,8 @@ def test_missing_readings_are_not_flagged_and_show_as_dashes(tmp_path, capsys):
 
     assert main([str(run)]) == 0
     row = capsys.readouterr().out.splitlines()[1].split()
-    assert row[-6:] == ["-"] * 6
+    assert row[-10:-5] == ["-"] * 5
+    assert row[-1] == "-"
 
 
 @pytest.mark.parametrize(
