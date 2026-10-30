@@ -43,7 +43,7 @@ A Campaign runs every Model variant on every Clip, three repeats each, in shuffl
 A trial with 2 Clips, 2 Model variants and 2 repeats (8 Runs):
 
 ```powershell
-.\scripts\run-campaign.ps1 -Variants lite full -Clips front side -Repeats 2
+.\scripts\run-campaign.ps1 -Variants lite,full -Clips front,side -Repeats 2
 ```
 
 With no arguments the script runs the real thing: all three variants, all five Clips, 3 repeats. It copies the code and clips, starts the Campaign, checks every 30 s until it finishes, then copies `~/bench/campaigns/<id>/` to `runs\board\<id>\`. If the window closes, `.\scripts\run-campaign.ps1 -Attach <id>` waits for and copies the same Campaign. `<id>` is a UTC timestamp such as `20261024T120000Z`, printed when the Campaign starts. `-Seed` fixes the shuffle seed.

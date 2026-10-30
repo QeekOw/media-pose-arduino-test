@@ -1,6 +1,6 @@
 # Run the Video phase on the Board unattended, then copy the results to runs\board\<id>\. Examples:
 #   .\scripts\run-campaign.ps1                                                  every variant x all five Clips x 3 repeats
-#   .\scripts\run-campaign.ps1 -Variants lite full -Clips front side -Repeats 2    a trial
+#   .\scripts\run-campaign.ps1 -Variants lite,full -Clips front,side -Repeats 2    a trial
 #   .\scripts\run-campaign.ps1 -Attach 20261024T120000Z                         wait for and copy an already started campaign
 # The campaign runs on the Board under nohup, so closing the laptop or losing SSH does not stop it.
 param(
