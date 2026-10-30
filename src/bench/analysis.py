@@ -32,10 +32,13 @@ class RunSummary:
     max_temp_c: float | None
     min_cpu_mhz: int | None
     pck: float | None
+    pck_landmarks: int
     detection_rate: float | None
     false_detection_rate: float | None
     jitter: float | None
     flags: tuple[str, ...]
+    frame_ms: tuple[float, ...]
+    temps: tuple[tuple[int, float], ...]
 
     @property
     def has_numbers(self) -> bool:
@@ -144,10 +147,13 @@ def summarize(run: RunFile, references: dict[str, list[Frame]] | None = None) ->
         max_temp_c=_over(max, readings(run, "temp_c")),
         min_cpu_mhz=_over(min, readings(run, "cpu_mhz")),
         pck=quality.pck,
+        pck_landmarks=quality.pck_landmarks,
         detection_rate=quality.detection_rate,
         false_detection_rate=quality.false_detection_rate,
         jitter=quality.jitter,
         flags=tuple(name for name, implausible in IMPLAUSIBLE if implausible(run)),
+        frame_ms=tuple(f.frame_ms for f in kept),
+        temps=tuple((s.t_ms, s.temp_c) for s in run.samples if s.temp_c is not None),
     )
 
 
@@ -163,8 +169,20 @@ def find_run_files(paths: list[str | Path]) -> list[Path]:
     return files
 
 
+def run_identity(run: RunFile) -> tuple:
+    if run.header is None:
+        return ("file", run.path)
+    h = run.header
+    return (h.variant, h.clip, h.repeat, h.machine_name, h.started_at)
+
+
 def analyze(paths: list[str | Path]) -> list[RunSummary]:
-    runs = [read_run(p) for p in find_run_files(paths)]
+    # The same Run can arrive twice: overlapping arguments, links, or a copied Campaign directory. Count it once.
+    unique: dict[tuple, RunFile] = {}
+    for path in find_run_files(paths):
+        run = read_run(path.resolve())
+        unique.setdefault(run_identity(run), run)
+    runs = list(unique.values())
     references = reference_frames(runs)
     summaries = [summarize(run, references) for run in runs]
     return sorted(summaries, key=lambda s: (s.variant, s.clip, s.repeat, s.machine))

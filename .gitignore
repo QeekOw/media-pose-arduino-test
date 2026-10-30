@@ -7,3 +7,4 @@ clips/
 .pytest_cache/
 runs-local/
 clips-raw/
+report/

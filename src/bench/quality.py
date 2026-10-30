@@ -23,6 +23,7 @@ class Quality:
     detection_rate: float | None
     false_detection_rate: float | None
     jitter: float | None
+    pck_landmarks: int = 0
 
 
 def clip_stem(clip: str) -> str:
@@ -39,8 +40,8 @@ def torso_length(points: np.ndarray) -> float:
     return float(np.linalg.norm(points[list(SHOULDERS)].mean(axis=0) - points[list(HIPS)].mean(axis=0)))
 
 
-def pck(frames: list[Frame], reference: list[Frame], width: int, height: int) -> float | None:
-    """Percent of landmarks within PCK_THRESHOLD torso lengths of the reference, over frames where both found a pose."""
+def pck_counts(frames: list[Frame], reference: list[Frame], width: int, height: int) -> tuple[int, int]:
+    """Landmarks within PCK_THRESHOLD torso lengths of the reference, and landmarks compared, over frames where both found a pose."""
     by_index = {f.index: f for f in reference}
     correct = total = 0
     for frame in frames:
@@ -55,7 +56,7 @@ def pck(frames: list[Frame], reference: list[Frame], width: int, height: int) ->
             continue
         correct += int((np.linalg.norm(run_xy - ref_xy, axis=1) <= PCK_THRESHOLD * torso).sum())
         total += LANDMARK_COUNT
-    return 100.0 * correct / total if total else None
+    return correct, total
 
 
 def detection_rate(frames: list[Frame]) -> float | None:
@@ -92,9 +93,11 @@ def measure(
     empty = clip_stem(clip) == EMPTY_CLIP
     has_size = bool(width and height)
     rate = detection_rate(frames)
+    correct, compared = pck_counts(frames, reference, width, height) if reference is not None and has_size else (0, 0)
     return Quality(
-        pck=pck(frames, reference, width, height) if reference is not None and has_size else None,
+        pck=100.0 * correct / compared if compared else None,
         detection_rate=None if empty else rate,
         false_detection_rate=rate if empty else None,
         jitter=jitter(frames, width, height) if clip_stem(clip) == JITTER_CLIP and has_size else None,
+        pck_landmarks=compared,
     )
