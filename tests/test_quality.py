@@ -176,7 +176,7 @@ def test_jitter_is_only_reported_on_the_front_view_clip(tmp_path):
 
 def test_a_run_with_the_wrong_number_of_landmarks_fails_only_its_run(tmp_path, capsys):
     bad = write_run(tmp_path / "video__lite__side__r1__board.jsonl", [pose()[:5]] * 40, clip="side.mp4")
-    good = write_run(tmp_path / "video__lite__side__r2__board.jsonl", [pose()] * 40, clip="side.mp4")
+    good = write_run(tmp_path / "video__lite__side__r2__board.jsonl", [pose()] * 40, clip="side.mp4", repeat=2)
 
     assert main([str(bad), str(good)]) == 0
 

@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -244,6 +245,48 @@ def test_overlapping_inputs_count_each_run_file_once(tmp_path):
         write_run(tmp_path, clip=clip)
 
     (v,) = verdicts(analyze([tmp_path, tmp_path, tmp_path / "video__lite__front__r1__board.jsonl"]))
+
+    assert v.runs == 5
+    assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]
+
+
+def test_a_copied_campaign_directory_counts_each_run_once(tmp_path):
+    import shutil
+
+    original = tmp_path / "campaign"
+    original.mkdir()
+    for clip in CLIPS:
+        write_run(original, clip=clip)
+    shutil.copytree(original, tmp_path / "backup")
+
+    (v,) = verdicts(analyze([original, tmp_path / "backup"]))
+
+    assert v.runs == 5
+    assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]
+
+
+def test_a_failed_run_without_a_header_keeps_its_name_when_passed_by_another_path(tmp_path):
+    write_campaign(tmp_path)
+    failed = tmp_path / "video__lite__front__r4__board.jsonl"
+    failed.write_text(json.dumps({"type": "status", "status": "oom"}) + "\n", encoding="utf-8")
+    alias = tmp_path.parent / f"{tmp_path.name}-failed-alias.jsonl"
+    try:
+        alias.symlink_to(failed)
+    except OSError:
+        pytest.skip("creating symlinks needs extra rights on this machine")
+
+    (v,) = verdicts(analyze([tmp_path, alias]))
+
+    assert failed_names(v) == ["no failed Runs"]
+
+
+def test_hard_links_do_not_add_repeats(tmp_path):
+    for clip in CLIPS:
+        run = write_run(tmp_path, clip=clip)
+        for n in (2, 3):
+            os.link(run, tmp_path / f"copy{n}-{run.name}")
+
+    (v,) = verdicts(analyze([tmp_path]))
 
     assert v.runs == 5
     assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]

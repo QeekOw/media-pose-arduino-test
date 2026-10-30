@@ -166,12 +166,23 @@ def find_run_files(paths: list[str | Path]) -> list[Path]:
             files.append(p)
         else:
             raise FileNotFoundError(p)
-    # Overlapping arguments (a directory twice, or a directory and a file in it) must not count one Run twice.
-    return list({f.resolve(): f for f in files}.values())
+    return files
+
+
+def run_identity(run: RunFile) -> tuple:
+    if run.header is None:
+        return ("file", run.path)
+    h = run.header
+    return (h.variant, h.clip, h.repeat, h.machine_name, h.started_at)
 
 
 def analyze(paths: list[str | Path]) -> list[RunSummary]:
-    runs = [read_run(p) for p in find_run_files(paths)]
+    # The same Run can arrive twice: overlapping arguments, links, or a copied Campaign directory. Count it once.
+    unique: dict[tuple, RunFile] = {}
+    for path in find_run_files(paths):
+        run = read_run(path.resolve())
+        unique.setdefault(run_identity(run), run)
+    runs = list(unique.values())
     references = reference_frames(runs)
     summaries = [summarize(run, references) for run in runs]
     return sorted(summaries, key=lambda s: (s.variant, s.clip, s.repeat, s.machine))
