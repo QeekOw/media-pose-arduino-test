@@ -52,13 +52,13 @@ class Camera:
     size: dict
 
     def read(self) -> tuple[float, float, np.ndarray] | None:
-        """(capture_ms, read_ms, RGB frame) on the monotonic clock, or None when the camera stopped delivering."""
+        """(capture_ms, read_ms, BGR frame) on the monotonic clock, or None when the camera stopped delivering."""
         ok, bgr = self.cap.read()
         if not ok:
             return None
         read_ms = time.monotonic() * 1000
         capture_ms = self.cap.get(cv2.CAP_PROP_POS_MSEC) if self.settings["capture_clock"] == "driver" else read_ms
-        return capture_ms, read_ms, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        return capture_ms, read_ms, bgr
 
     def close(self) -> None:
         self.cap.release()
@@ -253,7 +253,7 @@ def run_live(
                     frame = camera.read()
                     if frame is None:
                         raise CameraError(f"camera stopped after {index} frames")
-                    capture_ms, read_ms, rgb = frame
+                    capture_ms, read_ms, bgr = frame
                     if end_ms is None:
                         end_ms = capture_ms + seconds * 1000
                     if capture_ms >= end_ms:
@@ -265,6 +265,7 @@ def run_live(
                         # MediaPipe needs strictly rising timestamps and hands each one back with its result.
                         timestamp_ms = max(int(capture_ms), timestamp_ms + 1)
                         gate.send(Sent(index, timestamp_ms, capture_ms, read_ms))
+                        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
                         landmarker.detect_async(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), timestamp_ms)
                     index += 1
                     write_samples()
