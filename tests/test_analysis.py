@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bench.analysis import analyze, main
+from bench.analysis import NO_LIVE, analyze, analyze_webcam, main
 from bench.runfile import read_run
 
 
@@ -386,3 +386,219 @@ def test_header_sample_interval_is_optional(tmp_path):
 
     assert read_run(old).header.sample_interval_s is None
     assert read_run(new).header.sample_interval_s == 0.5
+
+
+POSE = [[0.5, 0.5, 0.0, 1.0]] * 33
+
+
+def live_frame(index, capture_ms, result_ms, pose=True, read_ms=None):
+    return {"type": "live_frame", "index": index, "capture_ms": capture_ms,
+            "read_ms": capture_ms + 5.0 if read_ms is None else read_ms, "result_ms": result_ms,
+            "dropped": result_ms is None, "landmarks": POSE if pose and result_ms is not None else None}
+
+
+def write_live_run(path, frames, status="completed", variant="lite", repeat=1, machine="board", samples=()):
+    """frames: (capture_ms, result_ms or None, has_pose) per camera frame, in capture order."""
+    lines = [{"type": "header", "format_version": 1, "phase": "webcam", "variant": variant, "clip": "live",
+              "repeat": repeat, "started_at": "2026-10-31T12:00:00+00:00", "machine": {"name": machine}}]
+    lines += [live_frame(i, capture_ms, result_ms, pose) for i, (capture_ms, result_ms, pose) in enumerate(frames)]
+    lines.extend(samples)
+    if status is not None:
+        lines.append({"type": "status", "status": status, "detail": ""})
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def test_live_frames_are_read_with_their_fate(tmp_path):
+    run = write_live_run(tmp_path / "a.jsonl", [(1000.0, 1200.0, True), (1033.0, None, False), (1066.0, 1250.0, False)])
+
+    parsed = read_run(run)
+
+    assert parsed.problem is None and parsed.frames == []
+    assert [(f.index, f.dropped, f.delay_ms) for f in parsed.live_frames] == [
+        (0, False, 200.0), (1, True, None), (2, False, 184.0),
+    ]
+    assert [f.landmarks is not None for f in parsed.live_frames] == [True, False, False]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"dropped": True},
+        {"result_ms": None},
+        {"dropped": 0},
+        {"result_ms": 899.0},
+        {"capture_ms": "1000"},
+        {"read_ms": None},
+        {"index": 1.0},
+    ],
+)
+def test_a_live_frame_that_contradicts_itself_is_a_corrupt_line(tmp_path, bad):
+    run = write_live_run(tmp_path / "a.jsonl", [(900.0, 1100.0, True)] * 2)
+    lines = run.read_text(encoding="utf-8").splitlines()
+    lines[2] = json.dumps({**json.loads(lines[2]), **bad})
+    run.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    parsed = read_run(run)
+
+    assert parsed.problem == "corrupt line 3"
+    assert len(parsed.live_frames) == 1
+
+
+def test_a_dropped_frame_with_landmarks_is_a_corrupt_line(tmp_path):
+    run = write_live_run(tmp_path / "a.jsonl", [(1000.0, None, False)])
+    lines = run.read_text(encoding="utf-8").splitlines()
+    lines[1] = json.dumps({**json.loads(lines[1]), "landmarks": POSE})
+    run.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert read_run(run).problem == "corrupt line 2"
+
+
+def test_a_header_with_an_unknown_phase_is_a_corrupt_line(tmp_path):
+    run = write_run(tmp_path / "a.jsonl", [100] * 60)
+    header, *rest = run.read_text(encoding="utf-8").splitlines()
+    run.write_text("\n".join([json.dumps({**json.loads(header), "phase": "live"}), *rest]) + "\n")
+
+    parsed = read_run(run)
+
+    assert parsed.problem == "corrupt line 1"
+    assert parsed.header is None
+
+
+def camera(seconds, fps=30.0, every=6, delay_ms=200.0, start_ms=1_000_000.0, pose=True):
+    """A camera at `fps` whose every `every`-th frame got a result `delay_ms` later; the rest were dropped."""
+    step = 1000.0 / fps
+    return [(start_ms + i * step, start_ms + i * step + delay_ms if i % every == 0 else None, pose)
+            for i in range(round(seconds * fps))]
+
+
+def test_processed_fps_dropped_share_and_delay_are_measured_after_warm_up(tmp_path):
+    run = write_live_run(tmp_path / "webcam__lite__live__r1__board.jsonl", camera(65))
+
+    (s,) = analyze_webcam([run])
+
+    assert (s.variant, s.session, s.machine, s.status) == ("lite", 1, "board", "completed")
+    assert s.frames == 1950
+    assert s.stats.camera_frames == 1800
+    assert s.stats.camera_fps == pytest.approx(30.0, rel=1e-3)
+    assert s.stats.processed_fps == pytest.approx(5.0, rel=1e-3)
+    assert s.stats.dropped_pct == pytest.approx(100 * 5 / 6)
+    assert s.stats.delay_avg_ms == pytest.approx(200.0)
+    assert s.stats.delay_p95_ms == pytest.approx(200.0)
+    assert s.stats.detection_rate == pytest.approx(100.0)
+
+
+def test_the_first_5_seconds_do_not_affect_results(tmp_path):
+    slow_start = [(c, None if r is None else c + 3000.0, p) for c, r, p in camera(5)]
+    steady = camera(60, start_ms=1_005_000.0)
+    run = write_live_run(tmp_path / "a.jsonl", slow_start + steady)
+
+    (s,) = analyze_webcam([run])
+
+    assert s.stats.delay_avg_ms == pytest.approx(200.0)
+    assert s.stats.camera_frames == 1800
+
+
+def test_delay_p95_and_detection_of_known_values(tmp_path):
+    # 100 processed frames with delays 1..100 ms: linear interpolation puts the 95th percentile at 1 + 0.95 * 99.
+    frames = [(1_000.0 + i * 100, 1_000.0 + i * 100 + (i - 49), i % 4 == 0) for i in range(50, 150)]
+    run = write_live_run(tmp_path / "a.jsonl", [(0.0, None, False)] + frames)
+
+    (s,) = analyze_webcam([run])
+
+    assert s.stats.delay_p95_ms == pytest.approx(95.05)
+    assert s.stats.delay_avg_ms == pytest.approx(50.5)
+    assert s.stats.detection_rate == pytest.approx(25.0)
+    assert s.stats.dropped_pct == pytest.approx(0.0)
+
+
+def test_a_session_no_longer_than_its_warm_up_has_no_numbers(tmp_path, capsys):
+    run = write_live_run(tmp_path / "a.jsonl", camera(5))
+
+    (s,) = analyze_webcam([run])
+
+    assert s.stats is None
+    assert main([str(run)]) == 0
+    assert "too short (needs more than 5 s)" in capsys.readouterr().out
+
+
+def test_sessions_pool_by_adding_their_counts(tmp_path):
+    write_live_run(tmp_path / "a.jsonl", camera(65, every=6, delay_ms=200.0), repeat=1)
+    write_live_run(tmp_path / "b.jsonl", camera(65, every=3, delay_ms=100.0), repeat=2)
+
+    one, two = analyze_webcam([tmp_path])
+    pooled = sum((one.stats, two.stats), NO_LIVE)
+
+    assert pooled.processed_fps == pytest.approx(7.5, rel=1e-3)
+    assert pooled.dropped_pct == pytest.approx(100 * 3 / 4)
+    assert pooled.delay_avg_ms == pytest.approx((300 * 200 + 600 * 100) / 900)
+    assert pooled.delay_p95_ms == pytest.approx(200.0)
+
+
+@pytest.mark.parametrize(
+    "frames, flag",
+    [
+        (camera(65, fps=20.0), "camera below 25 fps"),
+        (camera(65, fps=30.0), None),
+    ],
+)
+def test_a_camera_below_25_fps_is_flagged(tmp_path, frames, flag):
+    run = write_live_run(tmp_path / "a.jsonl", frames, samples=[sample(0), sample(1000)])
+
+    (s,) = analyze_webcam([run])
+
+    assert s.flags == (() if flag is None else (flag,))
+
+
+def test_a_read_time_far_from_the_capture_time_flags_the_clock(tmp_path):
+    run = write_live_run(tmp_path / "a.jsonl", camera(65), samples=[sample(0), sample(1000)])
+    lines = run.read_text(encoding="utf-8").splitlines()
+    lines[1000] = json.dumps({**json.loads(lines[1000]), "read_ms": json.loads(lines[1000])["capture_ms"] + 1500})
+    run.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    (s,) = analyze_webcam([run])
+
+    assert s.flags == ("capture clock off",)
+
+
+def test_a_session_with_no_frames_is_flagged_and_keeps_its_system_readings(tmp_path):
+    run = write_live_run(tmp_path / "a.jsonl", [], status="crashed", samples=[sample(0), sample(1000, rss_mb=350)])
+
+    (s,) = analyze_webcam([run])
+
+    assert s.flags == ("no frames",)
+    assert s.status == "crashed"
+    assert s.peak_rss_mb == 350
+
+
+def test_webcam_sessions_never_reach_the_video_phase(tmp_path):
+    write_live_run(tmp_path / "webcam__lite__live__r1__board.jsonl", camera(65))
+    write_run(tmp_path / "video__lite__front.mp4__r1__board.jsonl", [100] * 60, clip="front.mp4")
+
+    assert [s.clip for s in analyze([tmp_path])] == ["front.mp4"]
+    assert [s.session for s in analyze_webcam([tmp_path])] == [1]
+
+
+def test_a_session_that_died_before_its_header_is_a_failed_webcam_row(tmp_path):
+    dead = tmp_path / "webcam__lite__live__r2__board.jsonl"
+    dead.write_text(json.dumps({"type": "status", "status": "crashed", "detail": "exit code 1"}) + "\n")
+
+    (s,) = analyze_webcam([tmp_path])
+
+    assert analyze([tmp_path]) == []
+    assert (s.variant, s.session, s.machine, s.status) == ("lite", 2, "board", "failed: no header line")
+
+
+def test_cli_prints_the_webcam_table_after_the_video_table(tmp_path, capsys):
+    write_run(tmp_path / "a.jsonl", [100] * 60, clip="front.mp4")
+    write_live_run(tmp_path / "b.jsonl", camera(65))
+
+    assert main([str(tmp_path)]) == 0
+
+    video, webcam = capsys.readouterr().out.split("\n\nWebcam phase\n")
+    assert "front.mp4" in video
+    header, row = webcam.splitlines()
+    for column in ("session", "camera FPS", "processed FPS", "dropped %", "delay avg ms", "delay p95 ms"):
+        assert column in header
+    assert row.split()[:6] == ["lite", "1", "board", "completed", "1950", "1800"]
+    assert "5.00" in row.split() and "83.3" in row.split()

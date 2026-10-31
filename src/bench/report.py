@@ -13,7 +13,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from bench.analysis import RunSummary, analyze
+from bench.analysis import NO_LIVE, WEBCAM_WARMUP_MS, LiveStats, RunSummary, WebcamSummary, analyze, analyze_webcam
 from bench.models import VARIANTS
 from bench.quality import clip_stem
 
@@ -24,6 +24,12 @@ REPEATS = 3
 NONE_PASSED = (
     'No Model variant passed the Pass criteria, so the Webcam phase falls back to an "as-is" Lite demo.'
 )
+WEBCAM_TITLE = (
+    f"Webcam phase (Board, live camera in LIVE_STREAM mode with one frame at a time in MediaPipe, the first"
+    f" {WEBCAM_WARMUP_MS / 1000:g} s of each session is warm-up; delay runs from capture to result)"
+)
+STYLE = {"font.size": 16, "axes.titlesize": 20, "axes.spines.top": False, "axes.spines.right": False}
+COLORS = {BOARD: "#0B5C8A", LAPTOP: "#9AA5B1"}
 
 REPO = Path(__file__).resolve().parent
 
@@ -194,6 +200,60 @@ def spread(summaries: list[RunSummary]) -> list[Spread]:
     return out
 
 
+def label(variant: str, results: list[Verdict]) -> str:
+    """The name a variant runs live under: "as-is" when it failed the Pass criteria (ADR 0004)."""
+    verdict = next((v for v in results if v.variant == variant), None)
+    if verdict is None:
+        return f"{variant.capitalize()} (no verdict)"
+    return variant.capitalize() if verdict.passed else f"{variant.capitalize()} (as-is)"
+
+
+def webcam_sessions(sessions: list[WebcamSummary]) -> dict[str, list[WebcamSummary]]:
+    """Board sessions per Model variant."""
+    grouped = {v: [s for s in sessions if s.variant == v and s.machine == BOARD] for v in VARIANTS}
+    return {v: ss for v, ss in grouped.items() if ss}
+
+
+def _completed(sessions: list[WebcamSummary]) -> list[WebcamSummary]:
+    return [s for s in sessions if s.status == "completed" and s.stats is not None]
+
+
+def pooled_live(sessions: list[WebcamSummary]) -> LiveStats | None:
+    """Completed sessions pooled: every frame of every session counts once."""
+    done = _completed(sessions)
+    return sum((s.stats for s in done), NO_LIVE) if done else None
+
+
+def _fmt(value: float | None, fmt: str) -> str:
+    return "-" if value is None else fmt.format(value)
+
+
+def webcam_table(sessions: list[WebcamSummary], results: list[Verdict]) -> tuple[list[str], list[list[str]]]:
+    """One row per Model variant run live on the Board, its completed sessions pooled."""
+    headers = ["Variant", "Sessions", "Camera FPS", "Processed FPS", "Dropped %", "Delay avg ms", "Delay p95 ms",
+               "Detect %", "Peak RSS MB", "Avg CPU %", "Max temp C"]
+    rows = []
+    for variant, group in webcam_sessions(sessions).items():
+        done = _completed(group)
+        stats = pooled_live(group) or NO_LIVE
+        failed = len(group) - len(done)
+        cpu = [(s.avg_cpu_pct, s.stats.seconds) for s in done if s.avg_cpu_pct is not None]
+        rows.append([
+            label(variant, results),
+            f"{len(done)}" + (f" + {failed} failed" if failed else ""),
+            _fmt(stats.camera_fps, "{:.1f}"),
+            _fmt(stats.processed_fps, "{:.1f}"),
+            _fmt(stats.dropped_pct, "{:.1f}"),
+            _fmt(stats.delay_avg_ms, "{:.0f}"),
+            _fmt(stats.delay_p95_ms, "{:.0f}"),
+            _fmt(stats.detection_rate, "{:.1f}"),
+            _fmt(max((s.peak_rss_mb for s in done if s.peak_rss_mb is not None), default=None), "{}"),
+            _fmt(sum(c * t for c, t in cpu) / sum(t for _, t in cpu) if cpu else None, "{:.1f}"),
+            _fmt(max((s.max_temp_c for s in done if s.max_temp_c is not None), default=None), "{:.1f}"),
+        ])
+    return headers, rows
+
+
 def _table(headers: list[str], rows: list[list[str]]) -> str:
     widths = [max(len(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in [headers, *rows])
@@ -216,80 +276,100 @@ SUMMARY_COLUMNS: list[tuple[str, Callable[[list[RunSummary]], float | None], str
 ]
 
 
-def summary_table(summaries: list[RunSummary]) -> tuple[list[str], list[list[str]]]:
-    """One row per Model variant: Board and Laptop baseline side by side, then the verdict."""
+def summary_table(
+    summaries: list[RunSummary], sessions: list[WebcamSummary] = ()
+) -> tuple[list[str], list[list[str]]]:
+    """One row per Model variant: Board and Laptop baseline side by side, then the verdict.
+
+    When there are Board webcam sessions, the Webcam phase's pooled numbers follow the verdict.
+    """
     board, laptop = (by_variant(campaign_runs(summaries, m)) for m in (BOARD, LAPTOP))
-    passed = {v.variant: "PASS" if v.passed else "FAIL" for v in verdicts(summaries)}
+    results = verdicts(summaries)
+    passed = {v.variant: "PASS" if v.passed else "FAIL" for v in results}
+    live = {v: pooled_live(group) for v, group in webcam_sessions(sessions).items()}
     headers = ["Variant"]
     for name, _, _ in SUMMARY_COLUMNS:
         headers += [f"{name}\nBoard", f"{name}\nLaptop"]
     headers.append("Verdict")
+    if live:
+        headers += ["Webcam\nFPS", "Webcam\ndropped %", "Webcam delay ms\navg / p95"]
     rows = []
-    for variant in [v for v in VARIANTS if v in board or v in laptop]:
-        row = [variant.capitalize()]
+    for variant in [v for v in VARIANTS if v in board or v in laptop or v in live]:
+        row = [label(variant, results) if variant in live else variant.capitalize()]
         for _, measure, fmt in SUMMARY_COLUMNS:
             for runs in (board.get(variant), laptop.get(variant)):
                 value = measure(runs) if runs else None
                 row.append("-" if value is None else fmt.format(value))
         row.append(passed.get(variant, "not run"))
+        if live:
+            stats = live.get(variant) or NO_LIVE
+            delay = "-" if stats.delay_avg_ms is None else f"{stats.delay_avg_ms:.0f} / {stats.delay_p95_ms:.0f}"
+            row += [_fmt(stats.processed_fps, "{:.1f}"), _fmt(stats.dropped_pct, "{:.1f}"), delay]
         rows.append(row)
     return headers, rows
 
 
-def write_charts(summaries: list[RunSummary], out_dir: Path, footer: str = "") -> list[Path]:
-    plt.rcParams.update({"font.size": 16, "axes.titlesize": 20, "axes.spines.top": False, "axes.spines.right": False})
+def _save(fig, path: Path, footer: str) -> Path:
+    if footer:
+        fig.text(0.99, -0.02, footer, ha="right", va="top", fontsize=10, color="#5B6573")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def write_charts(
+    summaries: list[RunSummary], out_dir: Path, footer: str = "", sessions: list[WebcamSummary] = ()
+) -> list[Path]:
+    plt.rcParams.update(STYLE)
     out_dir.mkdir(parents=True, exist_ok=True)
     board, laptop = (by_variant(campaign_runs(summaries, m)) for m in (BOARD, LAPTOP))
     variants = [v for v in VARIANTS if v in board or v in laptop]
-    colors = {BOARD: "#0B5C8A", LAPTOP: "#9AA5B1"}
     written = []
 
     def save(fig, name: str) -> None:
-        path = out_dir / name
-        if footer:
-            fig.text(0.99, -0.02, footer, ha="right", va="top", fontsize=10, color="#5B6573")
-        fig.savefig(path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        written.append(path)
+        written.append(_save(fig, out_dir / name, footer))
 
-    headers, rows = summary_table(summaries)
-    fig, ax = plt.subplots(figsize=(13.33, 1.2 + 0.7 * len(rows)))
-    ax.axis("off")
-    table = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
-    table.auto_set_font_size(False)
-    table.set_fontsize(15)
-    table.scale(1, 2.6)
-    table.auto_set_column_width(range(len(headers)))
-    for (row, _), cell in table.get_celld().items():
-        cell.set_edgecolor("#D0D7DE")
-        if row == 0:
-            cell.set_text_props(weight="bold")
-            cell.set_height(cell.get_height() * 1.5)
-    for row, cells in enumerate(rows, start=1):
-        cell = table[row, len(headers) - 1]
-        cell.set_text_props(weight="bold", color={"PASS": "#1A7F37", "FAIL": "#B42318"}.get(cells[-1], "#5B6573"))
-    save(fig, "summary-table.png")
+    headers, rows = summary_table(summaries, sessions)
+    if rows:
+        fig, ax = plt.subplots(figsize=(13.33, 1.2 + 0.7 * len(rows)))
+        ax.axis("off")
+        table = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
+        table.auto_set_font_size(False)
+        table.set_fontsize(15)
+        table.scale(1, 2.6)
+        table.auto_set_column_width(range(len(headers)))
+        for (row, _), cell in table.get_celld().items():
+            cell.set_edgecolor("#D0D7DE")
+            if row == 0:
+                cell.set_text_props(weight="bold")
+                cell.set_height(cell.get_height() * 1.5)
+        verdict = headers.index("Verdict")
+        for row, cells in enumerate(rows, start=1):
+            color = {"PASS": "#1A7F37", "FAIL": "#B42318"}.get(cells[verdict], "#5B6573")
+            table[row, verdict].set_text_props(weight="bold", color=color)
+        save(fig, "summary-table.png")
 
-    fig, ax = plt.subplots(figsize=(10, 5.6))
-    x = np.arange(len(variants))
-    for offset, machine, label, grouped in ((-0.2, BOARD, "Board", board), (0.2, LAPTOP, "Laptop", laptop)):
-        values = [pooled_fps(grouped[v]) if v in grouped else None for v in variants]
-        bars = ax.bar(x + offset, [0 if f is None else f for f in values], 0.4, label=label, color=colors[machine])
-        ax.bar_label(bars, ["not run" if f is None else f"{f:.1f}" for f in values], padding=3)
-    ax.axhline(10, color="#B42318", linestyle="--", linewidth=1.5, label="pass: 10 FPS")
-    ax.set_xticks(x, [v.capitalize() for v in variants])
-    ax.set_ylabel("average FPS")
-    ax.set_title("FPS per Model variant")
-    ax.legend(frameon=False)
-    save(fig, "fps.png")
+    if variants:
+        fig, ax = plt.subplots(figsize=(10, 5.6))
+        x = np.arange(len(variants))
+        for offset, machine, label, grouped in ((-0.2, BOARD, "Board", board), (0.2, LAPTOP, "Laptop", laptop)):
+            values = [pooled_fps(grouped[v]) if v in grouped else None for v in variants]
+            bars = ax.bar(x + offset, [0 if f is None else f for f in values], 0.4, label=label, color=COLORS[machine])
+            ax.bar_label(bars, ["not run" if f is None else f"{f:.1f}" for f in values], padding=3)
+        ax.axhline(10, color="#B42318", linestyle="--", linewidth=1.5, label="pass: 10 FPS")
+        ax.set_xticks(x, [v.capitalize() for v in variants])
+        ax.set_ylabel("average FPS")
+        ax.set_title("FPS per Model variant")
+        ax.legend(frameon=False)
+        save(fig, "fps.png")
 
     board_variants = [v for v in variants if v in board and any(r.frame_ms for r in board[v])]
     if board_variants:
         fig, ax = plt.subplots(figsize=(10, 5.6))
         data = [[ms for r in board[v] for ms in r.frame_ms] for v in board_variants]
         ax.boxplot(data, whis=(5, 95), showfliers=False, patch_artist=True,
-                   boxprops={"facecolor": "#DCEBF5", "edgecolor": colors[BOARD]},
-                   medianprops={"color": colors[BOARD], "linewidth": 2})
+                   boxprops={"facecolor": "#DCEBF5", "edgecolor": COLORS[BOARD]},
+                   medianprops={"color": COLORS[BOARD], "linewidth": 2})
         ax.set_xticks(range(1, len(board_variants) + 1), [v.capitalize() for v in board_variants])
         ax.axhline(150, color="#B42318", linestyle="--", linewidth=1.5, label="pass: slowest 5% at most 150 ms")
         ax.legend(frameon=False)
@@ -307,7 +387,7 @@ def write_charts(summaries: list[RunSummary], out_dir: Path, footer: str = "") -
         for (machine, label, marker), ps in points.items():
             if not ps:
                 continue
-            ax.scatter([p[1] for p in ps], [p[2] for p in ps], s=140, marker=marker, color=colors[machine], label=label)
+            ax.scatter([p[1] for p in ps], [p[2] for p in ps], s=140, marker=marker, color=COLORS[machine], label=label)
             for v, fps, accuracy in ps:
                 ax.annotate(v.capitalize(), (fps, accuracy), textcoords="offset points", xytext=(8, 6))
         ax.set_xlabel("average FPS")
@@ -332,24 +412,72 @@ def write_charts(summaries: list[RunSummary], out_dir: Path, footer: str = "") -
     return written
 
 
+def write_webcam_charts(
+    sessions: list[WebcamSummary], results: list[Verdict], out_dir: Path, footer: str = ""
+) -> list[Path]:
+    """webcam-fps.png and webcam-delay.png from the Board sessions. Nothing is written without them."""
+    pooled = {v: stats for v, group in webcam_sessions(sessions).items() if (stats := pooled_live(group))}
+    if not pooled:
+        return []
+    plt.rcParams.update(STYLE)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    names = [label(v, results) for v in pooled]
+    stats = list(pooled.values())
+
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    x = np.arange(len(stats))
+    processed = [s.processed_fps for s in stats]
+    ax.bar(x, processed, 0.5, color=COLORS[BOARD], label="processed")
+    bars = ax.bar(x, [s.camera_fps - s.processed_fps for s in stats], 0.5, bottom=processed, color="#DCEBF5",
+                  edgecolor=COLORS[BOARD], label="dropped")
+    ax.bar_label(bars, [f"processed {s.processed_fps:.1f} of {s.camera_fps:.1f} ({s.dropped_pct:.0f}% dropped)"
+                        for s in stats], padding=3)
+    ax.axhline(10, color="#B42318", linestyle="--", linewidth=1.5, label="pass: 10 FPS")
+    ax.set_ylim(0, max(s.camera_fps for s in stats) * 1.15)
+    ax.set_xticks(x, names)
+    ax.set_ylabel("frames per second")
+    ax.set_title("Webcam on the Board: camera frames processed and dropped")
+    ax.legend(frameon=False)
+    written.append(_save(fig, out_dir / "webcam-fps.png", footer))
+
+    delayed = [(name, s) for name, s in zip(names, stats) if s.delays_ms]
+    if delayed:
+        fig, ax = plt.subplots(figsize=(10, 5.6))
+        ax.boxplot([s.delays_ms for _, s in delayed], whis=(5, 95), showfliers=False, patch_artist=True,
+                   boxprops={"facecolor": "#DCEBF5", "edgecolor": COLORS[BOARD]},
+                   medianprops={"color": COLORS[BOARD], "linewidth": 2})
+        ax.set_xticks(range(1, len(delayed) + 1),
+                      [f"{name}\navg {s.delay_avg_ms:.0f} ms, p95 {s.delay_p95_ms:.0f} ms" for name, s in delayed])
+        ax.set_ylabel("capture to result (ms)")
+        ax.set_title("Webcam delay on the Board (whiskers: 5th to 95th percentile)")
+        written.append(_save(fig, out_dir / "webcam-delay.png", footer))
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m bench.report", description="Verdicts, spread, summary table, charts.")
     parser.add_argument("paths", nargs="+", help="Run .jsonl files or directories of them: the Board's and runs/dev")
     parser.add_argument("--out-dir", type=Path, default=Path("report"), help="where to write the chart images")
     args = parser.parse_args(argv)
     try:
-        summaries = analyze(args.paths)
+        summaries, sessions = analyze(args.paths), analyze_webcam(args.paths)
     except FileNotFoundError as e:
         parser.error(f"no such file or directory: {e}")
-    if not summaries:
+    if not summaries and not sessions:
         parser.error("no Run files found")
-    print("Pass criteria\n" + format_verdicts(verdicts(summaries)))
+    results = verdicts(summaries)
+    print("Pass criteria\n" + format_verdicts(results))
     print("\nSpread across repeats\n" + format_spread(spread(summaries)))
-    headers, rows = summary_table(summaries)
+    headers, rows = summary_table(summaries, sessions)
     print("\nSummary\n" + _table([h.replace("\n", " ") for h in headers], rows))
+    webcam_headers, webcam_rows = webcam_table(sessions, results)
+    if webcam_rows:
+        print(f"\n{WEBCAM_TITLE}\n" + _table(webcam_headers, webcam_rows))
     made_by = provenance(args.paths)
     print(made_by + "\n")
-    for path in write_charts(summaries, args.out_dir, made_by):
+    charts = write_charts(summaries, args.out_dir, made_by, sessions)
+    for path in charts + write_webcam_charts(sessions, results, args.out_dir, made_by):
         print(f"wrote {path}")
     return 0
 

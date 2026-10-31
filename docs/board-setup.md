@@ -32,6 +32,7 @@ If `mediapipe` fails to install or run, stop. Record the exact error on the tick
 | Run one case on the Board | `.\scripts\run-on-board.ps1 -Variant lite -Clip smoke.mp4` |
 | Copy Run files back | `.\scripts\pull-runs.ps1` (lands in `runs\board\`) |
 | Run the whole Video phase unattended | `.\scripts\run-campaign.ps1` (see Campaign below) |
+| Run the Webcam phase | `.\scripts\run-campaign.ps1 -Webcam` (see Webcam phase below) |
 | Analyse | `$env:PYTHONPATH="src"; uv run python -m bench.analysis runs\board` |
 | Verdicts, summary table, charts | `$env:PYTHONPATH="src"; uv run python -m bench.report runs\board\<id> runs\dev` (images in `report\`) |
 
@@ -59,5 +60,23 @@ $env:PYTHONPATH="src"; uv run python -m bench.campaign --print-plan --variants l
 ```
 
 On the Dev machine the temperature cannot be read, so `python -m bench.campaign` there runs without cool-downs and says so in the log.
+
+## Webcam phase
+
+Connect the Logitech Brio 105 and the PD power supply to the Board through the hub, then:
+
+```powershell
+.\scripts\run-campaign.ps1 -Webcam                       # Lite, 3 sessions of 60 s
+.\scripts\run-campaign.ps1 -Webcam -Seconds 10 -Repeats 1   # a 10 s trial
+.\scripts\run-campaign.ps1 -Webcam -Variants lite,full      # if more than one variant is in scope
+```
+
+It is a Campaign whose Runs are live sessions: the same cool-down between sessions, one process per session, `campaign.json` and copy back, to `runs\board\webcam-<UTC timestamp>\`. Only Lite runs by default, because no Model variant passed the Pass criteria (ADR 0004). The script copies the code but not the Clips, and checks every 5 s, showing each new line of the Campaign's log. When a line says `starting ... move in front of the camera now`, step in front of the camera and keep moving for the session. The first 5 s are warm-up, so a late start costs nothing.
+
+Every session finds the camera by its USB identity (`/dev/v4l/by-id/usb-046d_Brio_105_*-video-index0`, because the `/dev/videoN` number moves), sets 1280x720 MJPG at 30 fps, and switches `exposure_dynamic_framerate` off with `v4l2-ctl`. That control is on by default and lets the camera slow to about 20 fps in dim light. A session that cannot find or configure the camera fails with the reason in `campaign.json`. Report it together with the Video phase:
+
+```powershell
+$env:PYTHONPATH="src"; uv run python -m bench.report runs\board\<video id> runs\board\webcam-<id> runs\dev
+```
 
 Disk note: the Board's root filesystem has about 3.9 GB free, but `/home/arduino` is a separate 16 GB partition. Models, clips, Run files and the venv all live under `/home/arduino`.
