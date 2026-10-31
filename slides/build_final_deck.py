@@ -308,7 +308,7 @@ def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,)
     data = CategoryChartData()
     order = list(reversed(VARIANTS))
     data.categories = [v.capitalize() for v in order]
-    series_names = {BOARD: "Board", LAPTOP: "Laptop"}
+    series_names = {BOARD: "UNO Q", LAPTOP: "Laptop"}
     for m in reversed(machines):
         data.add_series(series_names[m],
                         [n.variants[v].fps if m == BOARD else n.variants[v].laptop_fps for v in order])
@@ -338,7 +338,7 @@ def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,)
     labels.font.bold = True
     for series in plot.series:
         series.format.fill.solid()
-        series.format.fill.fore_color.rgb = ACCENT if series.name == "Board" else FAINT
+        series.format.fill.fore_color.rgb = ACCENT if series.name == "UNO Q" else FAINT
     chart.has_legend = len(machines) > 1
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.TOP
@@ -352,13 +352,13 @@ def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,)
     y1, y2 = top + int(height * py) - Inches(0.05), top + int(height * (py + ph))
     vline(slide, x, y1, y2, FAIL)
     add_text(slide, x - Inches(1.1), y2 + Inches(0.06), Inches(2.2), Inches(0.3),
-             [(f"Pass bar: {FPS_BAR:g} FPS", 13, FAIL, True, PP_ALIGN.CENTER)])
+             [(f"Target: {FPS_BAR:g} FPS", 13, FAIL, True, PP_ALIGN.CENTER)])
 
 
 def session_chart(slide, n: Numbers, left, top, width, height):
     """Processed FPS per webcam Session, with the Video phase speed of the same model as a dashed line."""
     data = CategoryChartData()
-    data.categories = [f"Session {x.session}" for x in n.webcam_sessions]
+    data.categories = [f"Live session {x.session}" for x in n.webcam_sessions]
     data.add_series("Processed FPS", [x.stats.processed_fps for x in n.webcam_sessions])
     chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, left, top, width, height, data).chart
     style_chart(chart, 13)
@@ -391,7 +391,7 @@ def session_chart(slide, n: Numbers, left, top, width, height):
     x_end = left + int(width * (px + pw))
     hline(slide, left + int(width * px), x_end + Inches(0.1), y, MUTED, 1.25)
     add_text(slide, x_end + Inches(0.18), y - Inches(0.25), Inches(1.5), Inches(0.5),
-             [("Video phase", 12, MUTED, True), (f"{video_fps:.1f} FPS", 12, MUTED, True)])
+             [("Speed on video", 12, MUTED, True), (f"{video_fps:.1f} FPS", 12, MUTED, True)])
 
 
 def frame_time_png(n: Numbers, path: Path) -> Path:
@@ -407,7 +407,7 @@ def frame_time_png(n: Numbers, path: Path) -> Path:
     ax.set_xticks(range(1, len(VARIANTS) + 1), [v.capitalize() for v in VARIANTS], fontsize=17,
                   fontweight="bold", color="#1F2937")
     ax.axhline(P95_BAR, color="#B42318", linestyle="--", linewidth=1.6)
-    ax.text(0.55, P95_BAR - 45, f"Pass bar: p95 ≤ {P95_BAR:g} ms", color="#B42318", ha="left",
+    ax.text(0.55, P95_BAR - 45, f"Target: p95 ≤ {P95_BAR:g} ms", color="#B42318", ha="left",
             fontsize=13, fontweight="bold")
     ax.set_ylabel("time per frame (ms)", color="#5B6573")
     ax.set_ylim(0, None)
@@ -433,7 +433,7 @@ def scatter_chart(slide, n: Numbers, left, top, width, height):
     va, ca = chart.value_axis, chart.category_axis
     va.minimum_scale, va.maximum_scale, va.major_unit = 80, 100, 5
     ca.minimum_scale, ca.maximum_scale, ca.major_unit = 0, 6, 1
-    for axis, title in ((va, "agreement with Heavy (PCK@0.2, %)"), (ca, "speed on the Board (FPS)")):
+    for axis, title in ((va, "agreement with Heavy (%)"), (ca, "speed on the UNO Q (frames per second)")):
         axis.has_title = True
         axis.axis_title.text_frame.text = title
         run = axis.axis_title.text_frame.paragraphs[0].runs[0]
@@ -465,7 +465,7 @@ def temperature_chart(slide, n: Numbers, left, top, width, height):
     colors = {"lite": ACCENT, "full": MUTED, "heavy": WARN}
     for v in VARIANTS:
         run = max(n.board_runs[v], key=lambda r: max((t for _, t in r.temps), default=0))
-        s = data.add_series(f"{v.capitalize()} ({clip_stem(run.clip)} Clip)")
+        s = data.add_series(v.capitalize())
         t0 = run.temps[0][0]
         for t, c in run.temps:
             s.add_data_point((t - t0) / 1000 / 60, c)
@@ -480,7 +480,7 @@ def temperature_chart(slide, n: Numbers, left, top, width, height):
     va, ca = chart.value_axis, chart.category_axis
     va.minimum_scale, va.maximum_scale, va.major_unit = 30, 60, 10
     ca.minimum_scale, ca.major_unit = 0, 2
-    for axis, title in ((va, "CPU °C"), (ca, "minutes into the hottest Run")):
+    for axis, title in ((va, "CPU °C"), (ca, "minutes into the test")):
         axis.has_title = True
         axis.axis_title.text_frame.text = title
         r = axis.axis_title.text_frame.paragraphs[0].runs[0]
@@ -597,14 +597,14 @@ def build(n: Numbers, out: Path) -> Path:
     add_text(s, Inches(1.1), Inches(2.3), Inches(11.6), Inches(3.2), [
         ("BENCHMARK RESULTS", 14, ACCENT, True),
         ("Testing MediaPipe pose models on the Arduino UNO Q", 36, INK, True),
-        ("Which model runs best on the Board, and how fast, on video and live", 22, MUTED, False),
+        ("Which model runs best on the UNO Q, and how fast, on video and live", 22, MUTED, False),
     ])
     add_text(s, Inches(1.1), Inches(6.3), Inches(11), Inches(0.4), [("November 2026", 14, FAINT, False)])
 
     # 1 Recommendation ---------------------------------------------------------------------------------
     s = d.slide(
-        "Use Lite. No model reached real-time on the Board, and Lite came closest",
-        sub=f"It reaches {pct(100 * lite.fps / FPS_BAR)} of the {FPS_BAR:g} FPS bar, so it fits uses where about "
+        "Use Lite. No model reached real-time on the UNO Q, and Lite came closest",
+        sub=f"It reaches {pct(100 * lite.fps / FPS_BAR)} of our {FPS_BAR:g} FPS target, so it fits uses where about "
             f"{lite.fps:.0f} pose updates a second is enough.",
         section="Recommendation",
         notes=(
@@ -617,23 +617,23 @@ def build(n: Numbers, out: Path) -> Path:
     tile_w, tile_h, gap = Inches(3.86), Inches(1.85), Inches(0.25)
     top = Inches(2.35)
     tiles = [
-        (f"{lite.fps:.1f} FPS", "average speed on the Board", (f"Pass bar {FPS_BAR:g} FPS: not met", 13, FAIL, True)),
-        (f"{lite.p95_ms:.0f} ms", "p95 frame time (95% of frames are faster)",
-         (f"Pass bar {P95_BAR:g} ms: not met", 13, FAIL, True)),
+        (f"{lite.fps:.1f} FPS", "frames per second on the UNO Q", (f"Target {FPS_BAR:g} FPS: not met", 13, FAIL, True)),
+        (f"{lite.p95_ms:.0f} ms", "p95 frame time: 95% of frames take less",
+         (f"Target {P95_BAR:g} ms: not met", 13, FAIL, True)),
         (f"{lite.detection:.0f}%", "of frames with a person found",
-         (f"Pass bar {DETECT_BAR:g}%: met", 13, PASS, True)),
+         (f"Target {DETECT_BAR:g}%: met", 13, PASS, True)),
     ]
     for i, (value, label, verdict) in enumerate(tiles):
         stat_tile(s, MARGIN + i * (tile_w + gap), top, tile_w, tile_h, value, label, verdict)
     add_bullets(s, MARGIN, Inches(4.75), CONTENT_W, Inches(1.6), [
         f"Full|: {pct(100 * (1 - full.fps / lite.fps))} slower than Lite, for {full.pck - lite.pck:.1f} points more "
-        "agreement with Heavy",
+        "agreement with Heavy, the largest model",
         f"Heavy|: {heavy.fps:.1f} FPS, {lite.fps / heavy.fps:.1f}× slower than Lite",
     ], size=18, gap=0.8)
 
     # 2 Method -----------------------------------------------------------------------------------------
     s = d.slide(
-        "All three models ran on video on the Board; Lite alone went on to a live webcam",
+        "We ran three pose models on the UNO Q: first on recorded video, then live",
         section="Method",
         notes=(
             "Same method as the slide sent before the measurements, now carried out. "
@@ -644,20 +644,20 @@ def build(n: Numbers, out: Path) -> Path:
             "Pass criteria: ADR 0004."))
     col_w = (CONTENT_W - 2 * Inches(0.35)) / 3
     columns = [
-        ("WHAT RAN", [
-            "Pose Landmarker Lite, Full, Heavy|: same 33 landmarks, different size",
-            "On the Board's CPU|: Arduino UNO Q 4 GB, Debian",
-            "mediapipe 0.10.18|, Python 3.12",
+        ("WHAT WE TESTED", [
+            "MediaPipe Pose Lite, Full, Heavy|: same 33 body points, small to large",
+            "On the UNO Q's processor|: 4 GB model, Linux, no accelerator",
+            "MediaPipe 0.10.18|, Python 3.12",
         ]),
-        ("TWO PHASES", [
-            f"Video phase|: 5 Clips × 3 repeats per model, {len(campaign_runs(n.summaries, BOARD))} Runs",
-            f"Webcam phase|: Lite, {len(n.webcam_sessions)} × 60 s live from a Logitech Brio 105",
-            "Laptop baseline|: the same Clips on the laptop",
+        ("HOW", [
+            f"1. Recorded video|: 5 test videos × 3 repeats per model, {len(campaign_runs(n.summaries, BOARD))} runs",
+            f"2. Live webcam|: Lite only, {len(n.webcam_sessions)} sessions of 60 s",
+            "For comparison|: the same videos on a laptop",
         ]),
-        ("WHAT COUNTS", [
-            f"Pass bar (ours)|: ≥ {FPS_BAR:g} FPS, p95 frame time ≤ {P95_BAR:g} ms, person found ≥ "
-            f"{DETECT_BAR:g}%, no failed Runs",
-            "Agreement with Heavy|: PCK@0.2 against Heavy on the laptop, a stand-in for hand-labelled truth",
+        ("HOW WE JUDGED", [
+            f"Our targets|: ≥ {FPS_BAR:g} frames per second, 95% of frames within {P95_BAR:g} ms, person found in ≥ "
+            f"{DETECT_BAR:g}% of frames, no crashes",
+            "Agreement with Heavy|: share of body points within 20% of torso length of Heavy's. No hand-labelled truth was used",
         ]),
     ]
     for i, (label, items) in enumerate(columns):
@@ -685,8 +685,8 @@ def build(n: Numbers, out: Path) -> Path:
             f"Lite {lite.fps_without_empty:.1f}, Full {full.fps_without_empty:.1f}, "
             f"Heavy {heavy.fps_without_empty:.1f} FPS. "
             + provenance_note))
-    hdr = ["", f"FPS\nbar ≥ {FPS_BAR:g}", f"p95 frame time\nbar ≤ {P95_BAR:g} ms", f"Person found\nbar ≥ {DETECT_BAR:g}%",
-           "Agreement\nwith Heavy", "Laptop\nFPS", "Verdict"]
+    hdr = ["", f"Frames / second\ntarget ≥ {FPS_BAR:g}", f"p95 frame time\ntarget ≤ {P95_BAR:g} ms",
+           f"Person found\ntarget ≥ {DETECT_BAR:g}%", "Agreement\nwith Heavy", "Laptop\nframes / s", "Verdict"]
     rows, colors = [hdr], {}
     for r, v in enumerate((lite, full, heavy), start=1):
         rows.append([v.name, f"{v.fps:.1f}", f"{v.p95_ms:.0f} ms", f"{v.detection:.1f}%", f"{v.pck:.1f}%",
@@ -697,15 +697,15 @@ def build(n: Numbers, out: Path) -> Path:
     table(s, MARGIN, Inches(2.1), CONTENT_W, rows, [1.6, 1.5, 1.8, 1.8, 1.7, 1.4, 1.3], row_h=Inches(0.78),
           size=22, header_size=14, cell_colors=colors)
     add_text(s, MARGIN, Inches(5.5), CONTENT_W, Inches(0.8), [
-        ("Red: misses the Pass bar. Speed numbers are the Board's; the laptop column is for comparison only.",
+        ("Red: misses our target. All numbers are on the UNO Q except the laptop column, shown for comparison.",
          14, MUTED, False)])
 
     # 4b frame times -----------------------------------------------------------------------------------
     png = frame_time_png(n, CHART_DIR / "frame-times.png")
     s = d.slide(
         f"The slowness is steady, not occasional: Lite's typical frame takes {lite.median_ms:.0f} ms",
-        sub=f"The p95 bar of {P95_BAR:g} ms fails because every frame is slow, not because of a few spikes.",
-        section="Video phase",
+        sub=f"The {P95_BAR:g} ms target is missed because every frame is slow, not because of a few spikes.",
+        section="Recorded video",
         notes=(
             "Box: middle half of frames. Whiskers: 5th to 95th percentile. "
             f"Median frame time: Lite {lite.median_ms:.0f} ms, Full {full.median_ms:.0f} ms, Heavy {heavy.median_ms:.0f} ms. "
@@ -717,7 +717,7 @@ def build(n: Numbers, out: Path) -> Path:
     s = d.slide(
         f"Full agrees with Heavy {full.pck - lite.pck:.1f} points more, at {pct(100 * (1 - full.fps / lite.fps))} "
         "less speed; Lite is the better trade",
-        section="Video phase",
+        section="Recorded video",
         notes=(
             f"Agreement with Heavy on the laptop (PCK@0.2): Lite {lite.pck:.1f}%, Full {full.pck:.1f}%, "
             f"Heavy {heavy.pck:.1f}%. Heavy's score is high partly by construction: it is compared with itself, "
@@ -725,15 +725,16 @@ def build(n: Numbers, out: Path) -> Path:
             f"Lite {lite.pck:.1f}% on the Board vs {lite.laptop_pck:.1f}% on the laptop. " + provenance_note))
     scatter_chart(s, n, MARGIN, Inches(1.95), Inches(8.2), Inches(5.0))
     add_text(s, MARGIN + Inches(8.7), Inches(2.4), Inches(3.4), Inches(3), [
-        ("Heavy scores high partly because it is the reference it is scored against.", 17, MUTED, False),
+        ("Agreement: how closely each model's body points match Heavy's.", 17, MUTED, False),
+        ("Heavy scores high partly because it is the model scored against.", 17, MUTED, False),
         ("Higher means closer to Heavy, not proven correct.", 17, MUTED, False),
     ])
 
     # 4d Demo video: Clip ------------------------------------------------------------------------------
     demo = n.demo_run
     s = d.slide(
-        "On a Clip, Lite tracks the person well, just slowly",
-        section="Video phase · Demo video",
+        "On recorded video, Lite tracks the person well, just slowly",
+        section="Recorded video · Demo",
         notes=(
             f"Demo video: the Board's own landmarks from one Video phase Run (Lite, front Clip, repeat {demo.repeat}), "
             f"drawn on the same frames. The Board ran this Run at {demo.fps:.1f} FPS; the video plays at the Clip's "
@@ -741,17 +742,17 @@ def build(n: Numbers, out: Path) -> Path:
     vw = Inches(8.9)
     video(s, DEMO_DIR / "video-phase.mp4", DEMO_DIR / "video-phase.png", MARGIN, Inches(1.6), vw)
     add_bullets(s, MARGIN + vw + Inches(0.4), Inches(1.7), SLIDE_W - 2 * MARGIN - vw - Inches(0.4), Inches(4), [
-        "Lite on the Board|, front Clip",
-        f"Ran at {demo.fps:.1f} FPS|; played back at 30 fps",
-        "Skeleton = the Board's own output",
+        "Lite on the UNO Q|, one test video",
+        f"Ran at {demo.fps:.1f} frames per second|; played back at normal speed",
+        "Skeleton = what the UNO Q computed",
     ], size=16, gap=1.0)
 
     # 5a Webcam ----------------------------------------------------------------------------------------
     s = d.slide(
         f"Live, Lite updates the pose about {w.processed_fps:.0f} times a second, "
         f"about {w.delay_avg_ms / 1000:.1f} s behind",
-        sub="One frame goes to MediaPipe at a time; camera frames that arrive meanwhile are dropped (ADR 0006).",
-        section="Webcam phase",
+        sub="The camera sends 30 frames a second; the model takes one at a time and skips the rest while busy.",
+        section="Live webcam",
         notes=(
             f"Lite, labelled 'as-is' because it failed the Pass criteria (ADR 0004). {len(n.webcam_sessions)} Sessions "
             f"of 60 s, first 5 s warm-up. Per Session: "
@@ -764,8 +765,8 @@ def build(n: Numbers, out: Path) -> Path:
             + f" FPS. {n.made_by_extra}. " + provenance_note))
     tiles = [
         (f"{w.processed_fps:.1f} FPS", f"processed, of {w.camera_fps:.0f} from the camera"),
-        (f"{w.dropped_pct:.0f}%", "of camera frames dropped"),
-        (f"{w.delay_avg_ms:.0f} ms", f"capture to result (p95 {w.delay_p95_ms:.0f} ms)"),
+        (f"{w.dropped_pct:.0f}%", "of camera frames skipped while the model was busy"),
+        (f"{w.delay_avg_ms:.0f} ms", f"from camera to pose result (95% within {w.delay_p95_ms:.0f} ms)"),
         (f"{w.detection_rate:.0f}%", "of processed frames with a person found"),
     ]
     tile_w = (CONTENT_W - 3 * Inches(0.25)) / 4
@@ -773,13 +774,13 @@ def build(n: Numbers, out: Path) -> Path:
         stat_tile(s, MARGIN + i * (tile_w + Inches(0.25)), Inches(2.05), tile_w, Inches(1.75), value, label)
     session_chart(s, n, MARGIN, Inches(4.2), Inches(7.4), Inches(2.75))
     add_text(s, MARGIN + Inches(7.9), Inches(4.6), CONTENT_W - Inches(7.9), Inches(1.8), [
-        ("Each Session landed close to the Video phase speed.", 16, INK, True),
-        (f"{len(n.webcam_sessions)} Sessions × 60 s, Brio 105 at 1280×720, 30 fps.", 14, MUTED, False)])
+        ("Each live session ran close to the speed on recorded video.", 16, INK, True),
+        (f"{len(n.webcam_sessions)} sessions × 60 s, Logitech Brio 105 webcam, 1280×720.", 14, MUTED, False)])
 
     # 5b Demo video: webcam ----------------------------------------------------------------------------
     s = d.slide(
         "Live, the skeleton follows the person a few times a second",
-        section="Webcam phase · Demo video",
+        section="Live webcam · Demo",
         notes=(
             "Demo video from a Demo recording on the Board: every camera frame, with the latest skeleton that had "
             "arrived when the frame was read, as a live viewer would see it. It is not measured: the preview adds "
@@ -787,16 +788,17 @@ def build(n: Numbers, out: Path) -> Path:
             "The numbers are on the previous slide."))
     video(s, DEMO_DIR / "webcam.mp4", DEMO_DIR / "webcam.png", MARGIN, Inches(1.6), vw)
     add_bullets(s, MARGIN + vw + Inches(0.4), Inches(1.7), SLIDE_W - 2 * MARGIN - vw - Inches(0.4), Inches(4), [
-        "Lite on the Board|, live",
+        "Lite on the UNO Q|, live",
         "Skeleton shown as it arrived|, so it trails movement",
+        "“as-is”|: shown live although it missed our targets",
         "Face blurred|; not measured",
     ], size=16, gap=1.0)
 
     # 6 Laptop baseline --------------------------------------------------------------------------------
     s = d.slide(
         f"The same models run {best_laptop_ratio:.1f}–{worst_laptop_ratio:.1f}× faster on the laptop",
-        sub="Lite and Full agree with Heavy about as well on the Board as on the laptop: slower, not worse.",
-        section="Laptop baseline",
+        sub="Lite and Full agree with Heavy about as well on the UNO Q as on the laptop: slower, not worse.",
+        section="Laptop comparison",
         notes=(
             "Laptop baseline: the same Clips, the same mediapipe 0.10.18 and Python 3.12, on the Windows laptop's CPU. "
             + " ".join(f"{v.name}: Board {v.fps:.1f} vs laptop {v.laptop_fps:.1f} FPS "
@@ -819,14 +821,14 @@ def build(n: Numbers, out: Path) -> Path:
             "and limited to the VENTUNO Q."))
     col_w = (CONTENT_W - Inches(0.5)) / 2
     for i, (label, title, items) in enumerate([
-        ("ADR 0001", "Arduino App Lab", [
-            "Container overhead|, which would mix into the timings",
-            "A second OpenCV|, which may clash with MediaPipe's",
+        ("NOT USED", "Arduino App Lab", [
+            "Extra software layers|, which would blur the timings",
+            "Its own video library|, which may clash with MediaPipe's",
             "Better suited to a final demo|: see Next steps",
         ]),
-        ("ADR 0002", "Other pose models", [
-            "Legacy mp.solutions.pose|: unsupported since 2023",
-            "Arduino's pose brick|: PoseNet, not MediaPipe; VENTUNO Q only",
+        ("NOT TESTED", "Other pose models", [
+            "The older MediaPipe pose API|: unsupported since 2023",
+            "Arduino's own pose add-on|: not MediaPipe, and not for the UNO Q",
             "Either can be added later|, without changing this comparison",
         ]),
     ]):
@@ -848,14 +850,14 @@ def build(n: Numbers, out: Path) -> Path:
             "per-frame timings, not profiled; in both webcam Campaigns the second Session was the fastest, which is "
             "not explained."))
     add_bullets(s, MARGIN, Inches(1.9), Inches(6.4), Inches(5), [
-        "The accuracy score is agreement with Heavy|, not hand-labelled ground truth",
-        f"No heatsink|: the Board peaked at {max_temp:.0f} °C; its effect on speed is untested",
-        "The Pass bars are ours|, not from a standard",
-        "Some details are unverified|: the webcam delay split, why Session 2 ran fastest",
+        "Accuracy means agreement with Heavy|, not checked against hand-labelled truth",
+        f"No heatsink|: the UNO Q peaked at {max_temp:.0f} °C; whether heat slowed it is untested",
+        "The targets are ours|, not from a standard",
+        "Some details are unexplained|: e.g. why the 2nd live session ran fastest",
     ], size=18, gap=1.1)
     temperature_chart(s, n, MARGIN + Inches(6.8), Inches(1.9), Inches(5.3), Inches(4.4))
     add_text(s, MARGIN + Inches(6.8), Inches(6.35), Inches(5.3), Inches(0.4),
-             [("CPU temperature during the hottest Video phase Run of each model", 12, MUTED, False)])
+             [("Processor temperature during each model's hottest test run", 12, MUTED, False)])
 
     # 9 Next steps -------------------------------------------------------------------------------------
     s = d.slide(
@@ -867,10 +869,10 @@ def build(n: Numbers, out: Path) -> Path:
             "Penn Action has hand-labelled joints, which would replace the Heavy stand-in. "
             "App Lab is Arduino's own way to ship an app (ADR 0001)."))
     steps = [
-        ("1", "LiteRT or GPU acceleration", f"Could narrow the {FPS_BAR / lite.fps:.1f}× speed gap; untested on the UNO Q"),
-        ("2", "Heatsink comparison", "Same Campaign with a heatsink, to see if heat limits speed"),
-        ("3", "A labelled dataset such as Penn Action", "Accuracy against real ground truth, not Heavy"),
-        ("4", "An App Lab demo", "Lite packaged the way Arduino ships apps"),
+        ("1", "Hardware acceleration (LiteRT or GPU)", f"Could narrow the {FPS_BAR / lite.fps:.1f}× speed gap; untested on the UNO Q"),
+        ("2", "Heatsink comparison", "Repeat the same tests with a heatsink, to see if heat limits speed"),
+        ("3", "A hand-labelled dataset such as Penn Action", "Measure true accuracy, not just agreement with Heavy"),
+        ("4", "An Arduino App Lab demo", "Lite packaged as a ready-to-use Arduino app"),
     ]
     row_h = Inches(1.15)
     for i, (num, title, why) in enumerate(steps):
@@ -887,12 +889,12 @@ def build(n: Numbers, out: Path) -> Path:
     spread_note = (f"FPS spread across repeats (range as % of mean): Board {min(pcts[BOARD]):.1f}–"
                    f"{max(pcts[BOARD]):.1f}%, laptop {min(pcts[LAPTOP]):.1f}–{max(pcts[LAPTOP]):.1f}%.")
     s = d.slide(
-        "Appendix A: repeats agreed closely on the Board, less so on the laptop",
+        "Appendix A: repeated runs agreed closely on the UNO Q, less so on the laptop",
         section="Appendix",
         notes=("FPS mean and range across the 3 repeats of each model and Clip, and the range of the p95 frame "
                "time. " + spread_note + " " + provenance_note))
-    rows = [["Model", "Clip", "Board FPS\nmean (min–max)", "Board p95 frame time\nms (min–max)",
-             "Laptop FPS\nmean (min–max)"]]
+    rows = [["Model", "Test video", "UNO Q frames / s\nmean (min–max)", "UNO Q p95 frame time\nms (min–max)",
+             "Laptop frames / s\nmean (min–max)"]]
     by_key = {(x.variant, x.clip, x.machine): x for x in rows_spread}
     for v in VARIANTS:
         for clip in ("front", "side", "fast", "far", "empty"):
@@ -906,11 +908,11 @@ def build(n: Numbers, out: Path) -> Path:
 
     # Appendix B: webcam -------------------------------------------------------------------------------
     s = d.slide(
-        "Appendix B: the three webcam Sessions",
+        "Appendix B: the three live webcam sessions",
         section="Appendix",
         notes=("Lite (as-is) on the Board, Campaign " + WEBCAM_CAMPAIGN + ". " + provenance_note))
-    rows = [["Session", "Camera FPS", "Processed FPS", "Dropped", "Delay avg", "Delay p95", "Person found",
-             "Peak RSS", "Max temp"]]
+    rows = [["Session", "Camera frames / s", "Processed frames / s", "Skipped", "Delay avg", "Delay p95",
+             "Person found", "Peak memory", "Max temp"]]
     for x in n.webcam_sessions:
         st = x.stats
         rows.append([str(x.session), f"{st.camera_fps:.1f}", f"{st.processed_fps:.1f}", f"{st.dropped_pct:.1f}%",
