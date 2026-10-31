@@ -27,6 +27,7 @@ CONNECTIONS = (
     (23, 24), (23, 25), (24, 26), (25, 27), (26, 28), (27, 29), (28, 30), (29, 31), (30, 32), (27, 31), (28, 32),
 )
 MIN_VISIBILITY = 0.5
+BLUR_CELLS = 8
 LENGTH_S = 15.0
 WEBCAM_CAPTION = "Lite (as-is) on the Board | live from the Brio 105 | skeleton shown as it arrived"
 
@@ -53,11 +54,16 @@ Box = tuple[int, int, int, int]
 
 
 def _face_box(landmarks: Landmarks, width: int, height: int) -> tuple[float, float, float, float]:
-    """A square around the face landmarks, twice as wide as their larger span, in pixels."""
+    """A square three times as wide as the face landmarks' larger span, in pixels.
+
+    The landmarks run from the eyes to the mouth, so the square sits a quarter span lower to take in the chin, and its
+    size takes in the hair. A 2x square left the chin and hairline showing on the Brio.
+    """
     xs = [landmarks[i][0] * width for i in FACE]
     ys = [landmarks[i][1] * height for i in FACE]
-    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    half = max(max(xs) - min(xs), max(ys) - min(ys))
+    span = max(max(xs) - min(xs), max(ys) - min(ys))
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2 + span / 4
+    half = 1.5 * span
     return cx - half, cy - half, cx + half, cy + half
 
 
@@ -117,9 +123,10 @@ def blur(img: np.ndarray, box: Box | None) -> None:
     x0, y0, x1, y1 = box if box is not None else (0, 0, w, h)
     if x1 <= x0 or y1 <= y0:
         return
-    region = img[y0:y1, x0:x1]
-    k = max(31, (max(x1 - x0, y1 - y0) // 4) | 1)
-    img[y0:y1, x0:x1] = cv2.GaussianBlur(region, (k, k), 0)
+    # Shrunk to 8 x 8 and smoothed back up: no feature smaller than an eighth of the box survives. A Gaussian blur
+    # sized to the box left the face readable.
+    small = cv2.resize(img[y0:y1, x0:x1], (BLUR_CELLS, BLUR_CELLS), interpolation=cv2.INTER_AREA)
+    img[y0:y1, x0:x1] = cv2.resize(small, (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
 
 
 def draw_caption(img: np.ndarray, text: str) -> None:
