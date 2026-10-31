@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from bench.analysis import WARMUP_FRAMES, analyze
+from bench.analysis import WARMUP_FRAMES, analyze, analyze_webcam
 from bench.report import (
     CLIPS,
     NONE_PASSED,
@@ -16,6 +16,7 @@ from bench.report import (
     spread,
     summary_table,
     verdicts,
+    webcam_table,
 )
 
 POSE = [[0.3 + i * 0.01, 0.2 + i * 0.015, 0.0, 1.0] for i in range(33)]
@@ -47,6 +48,24 @@ def write_campaign(dir_, **run):
     for clip in CLIPS:
         for repeat in range(1, REPEATS + 1):
             write_run(dir_, clip=clip, repeat=repeat, **run)
+
+
+def write_session(dir_, variant="lite", session=1, machine="board", status="completed", every=6, delay_ms=200.0):
+    """A 65 s Webcam phase session from a 30 fps camera: every `every`-th frame got a result `delay_ms` after capture."""
+    lines = [{"type": "header", "format_version": 1, "phase": "webcam", "variant": variant, "clip": "live",
+              "repeat": session, "started_at": "2026-10-31T14:00:00+00:00", "machine": {"name": machine}}]
+    for i in range(65 * 30):
+        capture_ms = 1_000_000.0 + i * 1000 / 30
+        result_ms = capture_ms + delay_ms if i % every == 0 else None
+        lines.append({"type": "live_frame", "index": i, "capture_ms": capture_ms, "read_ms": capture_ms + 5.0,
+                      "result_ms": result_ms, "dropped": result_ms is None,
+                      "landmarks": POSE if result_ms is not None else None})
+    lines.append({"type": "sample", "t_ms": 0, "cpu_pct": 50.0, "temp_c": 60.0})
+    if status is not None:
+        lines.append({"type": "status", "status": status, "detail": ""})
+    path = dir_ / f"webcam__{variant}__live__r{session}__{machine}.jsonl"
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
 
 
 def verdict_for(tmp_path, **run):
@@ -321,3 +340,97 @@ def test_provenance_names_the_commit_and_the_inputs(tmp_path):
 
 def test_provenance_outside_git_says_the_commit_is_unknown(tmp_path):
     assert provenance(["runs/dev"], repo=tmp_path) == "Made by an unknown commit from runs/dev"
+
+
+def webcam_rows(tmp_path):
+    return webcam_table(analyze_webcam([tmp_path]), verdicts(analyze([tmp_path])))[1]
+
+
+@pytest.mark.parametrize(
+    ("video", "label"),
+    [({"frame_ms": 185.0}, "Lite (as-is)"), ({"frame_ms": 100.0}, "Lite"), (None, "Lite (no verdict)")],
+)
+def test_a_variant_run_live_is_labelled_by_its_video_phase_verdict(tmp_path, video, label):
+    if video is not None:
+        write_campaign(tmp_path, **video)
+    for session in (1, 2, 3):
+        write_session(tmp_path, session=session)
+
+    (row,) = webcam_rows(tmp_path)
+
+    assert row[:2] == [label, "3"]
+
+
+def test_completed_sessions_are_pooled_and_failed_ones_counted(tmp_path):
+    write_session(tmp_path, session=1, every=6, delay_ms=200.0)
+    write_session(tmp_path, session=2, every=3, delay_ms=100.0)
+    write_session(tmp_path, session=3, every=1, delay_ms=50.0, status="crashed")
+
+    headers, (row,) = webcam_table(analyze_webcam([tmp_path]), [])
+
+    cells = dict(zip(headers, row))
+    assert cells["Sessions"] == "2 + 1 failed"
+    assert (cells["Camera FPS"], cells["Processed FPS"], cells["Dropped %"]) == ("30.0", "7.5", "75.0")
+    assert (cells["Delay avg ms"], cells["Delay p95 ms"], cells["Detect %"]) == ("133", "200", "100.0")
+
+
+def test_webcam_sessions_never_change_the_verdicts(tmp_path):
+    write_campaign(tmp_path)
+    write_session(tmp_path, status="crashed")
+
+    (v,) = verdicts(analyze([tmp_path]))
+
+    assert v.passed and v.runs == 15
+
+
+def test_summary_table_without_board_sessions_is_unchanged(tmp_path):
+    write_campaign(tmp_path, frame_ms=185.0)
+    write_session(tmp_path, machine="dev")
+    summaries = analyze([tmp_path])
+
+    headers, rows = summary_table(summaries, analyze_webcam([tmp_path]))
+
+    assert (headers, rows) == summary_table(summaries)
+    assert headers[-1] == "Verdict" and rows[0][0] == "Lite"
+
+
+def test_summary_table_shows_the_webcam_phase_after_the_verdict(tmp_path):
+    write_campaign(tmp_path, frame_ms=185.0)
+    for session in (1, 2, 3):
+        write_session(tmp_path, session=session)
+
+    headers, (row,) = summary_table(analyze([tmp_path]), analyze_webcam([tmp_path]))
+
+    cells = dict(zip(headers, row))
+    assert cells["Variant"] == "Lite (as-is)"
+    assert cells["Verdict"] == "FAIL"
+    assert (cells["Webcam\nFPS"], cells["Webcam\ndropped %"], cells["Webcam delay ms\navg / p95"]) == (
+        "5.0", "83.3", "200 / 200",
+    )
+
+
+def test_main_prints_the_webcam_phase_and_writes_its_charts(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    write_campaign(runs, frame_ms=185.0)
+    for session in (1, 2, 3):
+        write_session(runs, session=session)
+
+    assert main([str(runs), "--out-dir", str(tmp_path / "out")]) == 0
+
+    out = capsys.readouterr().out
+    webcam = out.split("\nWebcam phase (")[1].splitlines()
+    assert webcam[2].split()[:3] == ["Lite", "(as-is)", "3"]
+    images = sorted(p.name for p in (tmp_path / "out").iterdir())
+    assert images == ["fps.png", "frame-times.png", "summary-table.png", "temperature.png", "webcam-delay.png",
+                      "webcam-fps.png"]
+
+
+def test_main_reports_webcam_sessions_given_on_their_own(tmp_path, capsys):
+    write_session(tmp_path)
+
+    assert main([str(tmp_path), "--out-dir", str(tmp_path / "out")]) == 0
+
+    assert "Lite (no verdict)" in capsys.readouterr().out
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["summary-table.png", "webcam-delay.png",
+                                                                    "webcam-fps.png"]
