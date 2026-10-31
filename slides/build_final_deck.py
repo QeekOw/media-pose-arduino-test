@@ -3,7 +3,7 @@
 Every number on a slide is computed here through bench.report and bench.analysis, never typed by hand.
 Run from the repo root:
 
-    $env:PYTHONPATH="src"; uv run --with python-pptx --with matplotlib python slides\\build_final_deck.py
+    $env:PYTHONPATH="src"; uv run --with python-pptx python slides\\build_final_deck.py
 
 The output embeds the Demo videos from report/demo/ (face-blurred webcam footage), so it is gitignored.
 """
@@ -11,10 +11,6 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData, XyChartData
@@ -52,7 +48,6 @@ EXTRA_WEBCAM_CAMPAIGN = "runs/board/webcam-20261031T025448Z"
 LAPTOP_RUNS = "runs/dev"
 DEMO_RUN = "runs/board/video-20261031/video__lite__front__r1__board.jsonl"
 DEMO_DIR = ROOT / "report" / "demo"
-CHART_DIR = ROOT / "report" / "deck"
 OUT = Path(__file__).with_name("final-deck.pptx")
 CLIP_NAMES = {"front": "front view", "side": "side view", "fast": "fast movement",
               "far": "far / partly hidden", "empty": "empty room"}
@@ -396,30 +391,46 @@ def session_chart(slide, n: Numbers, left, top, width, height):
              [("On recorded video", 12, MUTED, True), (f"{video_fps:.1f} FPS", 12, MUTED, True)])
 
 
-def frame_time_png(n: Numbers, path: Path) -> Path:
-    plt.rcParams.update({"font.family": "Calibri", "font.size": 15, "axes.spines.top": False,
-                         "axes.spines.right": False, "axes.edgecolor": "#D0D7DE", "xtick.color": "#5B6573",
-                         "ytick.color": "#5B6573"})
-    fig, ax = plt.subplots(figsize=(7.4, 4.6))
-    data = [[ms for r in n.board_runs[v] for ms in r.frame_ms] for v in VARIANTS]
-    ax.boxplot(data, whis=(5, 95), showfliers=False, patch_artist=True, widths=0.45,
-               boxprops={"facecolor": "#E8F1F7", "edgecolor": "#0B5C8A"},
-               whiskerprops={"color": "#0B5C8A"}, capprops={"color": "#0B5C8A"},
-               medianprops={"color": "#0B5C8A", "linewidth": 2.5})
-    ax.set_xticks(range(1, len(VARIANTS) + 1), [v.capitalize() for v in VARIANTS], fontsize=17,
-                  fontweight="bold", color="#1F2937")
-    ax.axhline(P95_BAR, color="#B42318", linestyle="--", linewidth=1.6)
-    ax.text(0.55, P95_BAR - 45, f"Target: p95 ≤ {P95_BAR:g} ms", color="#B42318", ha="left",
-            fontsize=13, fontweight="bold")
-    ax.set_ylabel("time per frame (ms)", color="#5B6573")
-    ax.set_ylim(0, None)
-    ax.yaxis.grid(True, color="#EEF1F4")
-    ax.set_axisbelow(True)
-    fig.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=220)
-    plt.close(fig)
-    return path
+def frame_time_chart(slide, n: Numbers, left, top, width, height):
+    """Typical and 95th-percentile frame time per model, as paired bars, with the target as a dashed line."""
+    data = CategoryChartData()
+    order = list(reversed(VARIANTS))
+    data.categories = [v.capitalize() for v in order]
+    data.add_series("95% of frames within", [n.variants[v].p95_ms for v in order])
+    data.add_series("Typical frame", [n.variants[v].median_ms for v in order])
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, left, top, width, height, data).chart
+    style_chart(chart, 16)
+    chart.has_title = False
+    top_value = max(v.p95_ms for v in n.variants.values()) * 1.18
+    va = chart.value_axis
+    va.minimum_scale, va.maximum_scale = 0, top_value
+    va.visible = False
+    hide_gridlines(va)
+    ca = chart.category_axis
+    ca.tick_labels.font.size = Pt(18)
+    ca.tick_labels.font.bold = True
+    ca.format.line.fill.background()
+    plot = chart.plots[0]
+    plot.gap_width, plot.overlap = 55, 0
+    plot.has_data_labels = True
+    labels = plot.data_labels
+    labels.number_format, labels.number_format_is_linked = '0" ms"', False
+    labels.position = XL_LABEL_POSITION.OUTSIDE_END
+    labels.font.size, labels.font.bold = Pt(15), True
+    for series in plot.series:
+        series.format.fill.solid()
+        series.format.fill.fore_color.rgb = ACCENT if series.name == "Typical frame" else FAINT
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.TOP
+    chart.legend.include_in_layout = False
+    chart.legend.font.size = Pt(15)
+    px, py, pw, ph = 0.1, 0.1, 0.86, 0.86
+    manual_plot_area(chart, px, py, pw, ph)
+    x = left + int(width * (px + pw * P95_BAR / top_value))
+    y1, y2 = top + int(height * py) - Inches(0.05), top + int(height * (py + ph))
+    vline(slide, x, y1, y2, FAIL)
+    add_text(slide, x - Inches(1.1), y2 + Inches(0.06), Inches(2.2), Inches(0.3),
+             [(f"Target: {P95_BAR:g} ms", 13, FAIL, True, PP_ALIGN.CENTER)])
 
 
 def scatter_chart(slide, n: Numbers, left, top, width, height):
@@ -706,23 +717,20 @@ def build(n: Numbers, out: Path) -> Path:
          14, MUTED, False)])
 
     # 4b frame times -----------------------------------------------------------------------------------
-    png = frame_time_png(n, CHART_DIR / "frame-times.png")
     s = d.slide(
-        f"The slowness is steady, not occasional: Lite's typical frame takes {lite.median_ms:.0f} ms",
-        sub=f"The {P95_BAR:g} ms target is missed because every frame is slow, not because of a few spikes.",
+        f"Every frame is too slow, not just a few: Lite's typical frame takes {lite.median_ms:.0f} ms",
+        sub=f"For each model the typical frame and the slow end are close together, and both are above the "
+            f"{P95_BAR:g} ms target.",
         section="Recorded video",
         notes=(
-            "Box: middle half of frames. Whiskers: 5th to 95th percentile. "
-            f"Median frame time: Lite {lite.median_ms:.0f} ms, Full {full.median_ms:.0f} ms, Heavy {heavy.median_ms:.0f} ms. "
-            f"95th percentile (p95): Lite {lite.p95_ms:.0f}, Full {full.p95_ms:.0f}, Heavy {heavy.p95_ms:.0f} ms. "
-            "Heavy's low whisker is the empty-room Clip, where only the person detector runs. " + provenance_note))
-    s.shapes.add_picture(str(png), MARGIN, Inches(2.0), height=Inches(5.0))
-    add_text(s, MARGIN + Inches(8.4), Inches(2.4), Inches(3.7), Inches(4), [
-        ("How to read it", 16, INK, True),
-        ("Box: the middle half of all frames. Line inside: the typical frame.", 15, MUTED, False),
-        ("Whiskers: from the fastest 5% to the slowest 5%.", 15, MUTED, False),
-        ("Heavy's long whisker is the empty-room video: with nobody in view, only the quick person search runs.", 15, MUTED, False),
-    ])
+            "Typical frame = the median frame time. 95% of frames within = the 95th percentile (p95), which is "
+            f"what the {P95_BAR:g} ms target applies to. "
+            f"Median: Lite {lite.median_ms:.0f} ms, Full {full.median_ms:.0f} ms, Heavy {heavy.median_ms:.0f} ms. "
+            f"p95: Lite {lite.p95_ms:.0f}, Full {full.p95_ms:.0f}, Heavy {heavy.p95_ms:.0f} ms. "
+            "Because the two are close, the slowness is steady rather than caused by occasional spikes. "
+            "On the empty-room video every model is faster, since with nobody in view only the person search runs. "
+            + provenance_note))
+    frame_time_chart(s, n, MARGIN, Inches(2.0), Inches(11.5), Inches(4.9))
 
     # 4c accuracy vs speed -----------------------------------------------------------------------------
     s = d.slide(
