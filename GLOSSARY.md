@@ -61,3 +61,7 @@ _Avoid_: take, recording, live Run
 **Demo recording**:
 A webcam capture on the Board that saves the camera frames together with the pose results, made only to show tracking on a slide. It is never measured, never counted as a Session, never given to Analysis, and never made while a Campaign runs.
 _Avoid_: demo Session, demo Run, recording
+
+**Demo video**:
+A short video of the pose skeleton drawn over real frames, made on the Dev machine from one Video phase Run or one Demo recording, only to show on a slide. Like a Demo recording, it is never measured.
+_Avoid_: demo clip, Demo recording (that is the raw capture a Demo video may be drawn from)
