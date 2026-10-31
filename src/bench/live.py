@@ -44,7 +44,8 @@ class CameraError(Exception):
 class Camera:
     """The Brio, opened by USB identity: 1280x720 MJPG at 30 fps with exposure_dynamic_framerate off.
 
-    settings is the header's `camera` block and size its `clip_info`.
+    settings is the header's `camera` block and size its `clip_info`. A raw camera hands over each frame as the
+    JPEG the camera sent (a 1 x N uint8 array) instead of decoding it.
     """
 
     cap: cv2.VideoCapture
@@ -52,7 +53,10 @@ class Camera:
     size: dict
 
     def read(self) -> tuple[float, float, np.ndarray] | None:
-        """(capture_ms, read_ms, BGR frame) on the monotonic clock, or None when the camera stopped delivering."""
+        """(capture_ms, read_ms, frame) on the monotonic clock, or None when the camera stopped delivering.
+
+        The frame is BGR, or the raw JPEG when the camera was opened raw.
+        """
         ok, bgr = self.cap.read()
         if not ok:
             return None
@@ -79,8 +83,11 @@ def _fourcc(cap: cv2.VideoCapture) -> str:
     return "".join(chr((code >> shift) & 0xFF) for shift in (0, 8, 16, 24))
 
 
-def open_camera(pattern: str = BRIO) -> Camera:
-    """Find, configure and check the camera. Raises CameraError naming what is wrong."""
+def open_camera(pattern: str = BRIO, raw: bool = False) -> Camera:
+    """Find, configure and check the camera. Raises CameraError naming what is wrong.
+
+    raw hands over each frame undecoded (see Camera), for a Demo recording that saves the camera's own JPEGs.
+    """
     devices = sorted(glob.glob(pattern))
     if len(devices) != 1:
         raise CameraError(f"expected one camera matching {pattern}, found {len(devices)}")
@@ -99,10 +106,16 @@ def open_camera(pattern: str = BRIO) -> Camera:
         got = _v4l2_ctl(device, "--get-ctrl=exposure_dynamic_framerate").strip()
         if got.rsplit(":", 1)[-1].strip() != "0":
             raise CameraError(f"exposure_dynamic_framerate did not switch off on {device}: {got!r}")
+        if raw and not cap.set(cv2.CAP_PROP_CONVERT_RGB, 0):
+            raise CameraError(f"{device} cannot hand over raw frames")
         ok, bgr = cap.read()
         now_ms = time.monotonic() * 1000
         if not ok:
             raise CameraError(f"{device} gave no frame")
+        if raw:
+            bgr = cv2.imdecode(bgr, cv2.IMREAD_COLOR)
+            if bgr is None:
+                raise CameraError(f"{device} gave a raw frame that is not a JPEG")
         driver_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
         fourcc, fps = _fourcc(cap), cap.get(cv2.CAP_PROP_FPS)
         height, width = bgr.shape[:2]
