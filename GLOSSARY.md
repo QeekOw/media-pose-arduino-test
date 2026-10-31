@@ -53,3 +53,7 @@ _Avoid_: gate, threshold, requirements
 **Webcam phase**:
 The second phase, in which Model variants that met the Pass criteria run on the Board against live frames from a USB webcam.
 _Avoid_: live test, camera test, real-time phase
+
+**Session**:
+One Webcam phase Run: one Model variant fed live frames from the webcam for a fixed time, 60 s by default. Each variant in scope gets three.
+_Avoid_: take, recording, live Run

@@ -2,12 +2,12 @@
 
 A Run file is JSON Lines: one JSON object per line, each with a `type`. It is the only seam between data collection and Analysis. A crash mid-Run leaves every line written so far readable. Analysis ignores line types it does not know, so later tickets can add types without breaking old Run files.
 
-Version 1. Name files `<phase>__<variant>__<clip>__r<repeat>__<machine>.jsonl`.
+Version 1. Name files `<phase>__<variant>__<clip>__r<repeat>__<machine>.jsonl`. A Webcam phase session uses the clip slot `live` and its session number as the repeat, as in `webcam__lite__live__r2__board.jsonl`.
 
 ## Line order
 
 1. one `header` line (first),
-2. any number of `frame` lines, in frame order, with `sample` lines interleaved between them,
+2. any number of `frame` lines (Video phase) or `live_frame` lines (Webcam phase), in frame order, with `sample` lines interleaved between them,
 3. one `status` line (last, written on every exit the process can catch).
 
 A Run file with no `status` line counts as failed. On Linux an out-of-memory kill is a SIGKILL the process cannot catch, so a Run started on its own with `bench.run_one` leaves no `status` line and Analysis shows it as `failed: no status line`.
@@ -42,7 +42,24 @@ A Campaign (`python -m bench.campaign`) starts every Run as a child process and 
 }
 ```
 
-`variant` is `lite`, `full` or `heavy`. `phase` is `video` or `webcam`. `machine.name` is `board` or `dev`. `sample_interval_s` is the `--sample-interval` the Run used; Run files written before it existed lack it.
+`variant` is `lite`, `full` or `heavy`. `phase` is `video` or `webcam`; any other value makes line 1 corrupt. `machine.name` is `board` or `dev`. `sample_interval_s` is the `--sample-interval` the Run used; Run files written before it existed lack it.
+
+A Webcam phase header has `clip` `live`, the session number as `repeat`, and two more keys:
+
+```json
+{
+  "session_s": 60.0,
+  "clip_info": {"width": 1280, "height": 720, "fps": 30.0},
+  "camera": {
+    "device": "/dev/v4l/by-id/usb-046d_Brio_105_2524ZBL03X08-video-index0",
+    "fourcc": "MJPG",
+    "exposure_dynamic_framerate": 0,
+    "capture_clock": "driver"
+  }
+}
+```
+
+`clip_info` is what the camera delivered after the format was checked. `capture_clock` is `driver` when `capture_ms` is the V4L2 buffer timestamp, or `read` when a probe frame at the start showed that timestamp is not on the monotonic clock and the time `read()` returned was used instead.
 
 ## `frame`
 
@@ -55,6 +72,25 @@ A Campaign (`python -m bench.campaign`) starts every Run as a child process and 
 - `landmarks` is 33 entries of `[x, y, z, visibility]` as MediaPipe returns them (x and y normalised to 0–1 of the frame width and height), or `null` when no person was found.
 
 Frame time is `video_ms + model_ms`.
+
+## `live_frame`
+
+```json
+{"type": "live_frame", "index": 41, "capture_ms": 5123456.8, "read_ms": 5123470.1, "result_ms": 5123689.2, "dropped": false, "landmarks": [[0.51, 0.22, -0.3, 0.99], "...33 entries..."]}
+{"type": "live_frame", "index": 42, "capture_ms": 5123490.1, "read_ms": 5123503.0, "result_ms": null, "dropped": true, "landmarks": null}
+```
+
+One line per camera frame the program read, in the Webcam phase. Every frame read goes to MediaPipe in LIVE_STREAM mode. Times are milliseconds on the Board's monotonic clock; only differences mean anything.
+
+- `capture_ms` is when the frame was captured (see `capture_clock` in the header).
+- `read_ms` is when `read()` returned it. Analysis flags `capture clock off` when the two are more than 1 s apart, or in the wrong order, after warm-up.
+- `result_ms` is when MediaPipe's result callback ran for the frame, or `null` when no result ever came back.
+- `dropped` is `true` exactly when `result_ms` is `null`: MediaPipe skipped the frame, or still held it 1 s after the session ended.
+- `landmarks` is as in `frame`, and always `null` on a dropped frame.
+
+A line is written once the frame's fate is known, so a crash loses only the frames still waiting for a result. A line whose `dropped` disagrees with `result_ms`, whose result comes before its capture, or that has landmarks on a dropped frame is a corrupt line.
+
+Delay is `result_ms - capture_ms`: from capture to result. It includes any time the frame waited inside MediaPipe before the model ran. MediaPipe's LIVE_STREAM flow limiter is configured to keep one frame waiting and skip the rest, which would cap that wait at about one model time. On the Dev machine, `mediapipe` 0.10.18 skipped no frames and queued about 100 instead, so check the Board's delay over time before reading its average.
 
 ## `sample`
 
@@ -80,11 +116,26 @@ Every reading is a number or `null`, and `t_ms` is an integer. Any value the mac
 {"type": "status", "status": "completed", "detail": ""}
 ```
 
-`status` is `completed`, `crashed` or `oom`. `detail` holds the error message for the last two. A Run that reads fewer frames than the header's `clip_info.frame_count` is written as `crashed` with detail `stopped early: read N of M frames`.
+`status` is `completed`, `crashed` or `oom`. `detail` holds the error message for the last two. A Run that reads fewer frames than the header's `clip_info.frame_count` is written as `crashed` with detail `stopped early: read N of M frames`. A Webcam phase session whose camera stops delivering is written as `crashed` with detail `camera stopped after N frames`. A session that cannot find or configure the camera exits before creating its file, as a Run with an unreadable Clip does.
 
 ## Unreadable Run files
 
-Analysis never aborts on a bad Run file. An empty file, a missing header, an unparseable line (anywhere but a truncated last line), or a `sample` line with a value of the wrong type, or a `frame` line whose `landmarks` are not `null` or 33 entries of four numbers, makes that Run a failed row, shown as `failed: no header line` or `failed: corrupt line N`. Frames read before the bad line are kept, and a status line after a bad line is ignored. When the header is missing, variant, clip, repeat and machine come from the file name, which is why the name pattern above matters.
+Analysis never aborts on a bad Run file. An empty file, a missing header, an unparseable line (anywhere but a truncated last line), or a `sample` line with a value of the wrong type, or a `frame` line whose `landmarks` are not `null` or 33 entries of four numbers, makes that Run a failed row, shown as `failed: no header line` or `failed: corrupt line N`. Frames read before the bad line are kept, and a status line after a bad line is ignored. When the header is missing, phase, variant, clip, repeat and machine come from the file name, which is why the name pattern above matters.
+
+Analysis sorts files by phase from the first line alone: the header's phase, else the file name's, else video. Video phase Runs and Webcam phase sessions are summarised apart, so a session never reaches the Pass criteria.
+
+## Webcam phase measures
+
+Analysis leaves out the frames captured in the first 5 s of each session, timed from its first frame. That covers stale frames left in the camera's buffers while the model loaded and the slow first model call. Over the rest, with seconds counted from the end of warm-up to the last frame captured:
+
+- **Camera FPS** is frames read per second. It is flagged `camera below 25 fps` when the camera or the read loop fell behind the 30 fps the camera was set to.
+- **Processed FPS** is frames with a result per second.
+- **Dropped %** is the share of frames read that never got a result.
+- **Delay** is the average and the 95th percentile of capture to result, over processed frames.
+- **Detect %** is the share of processed frames with a pose.
+- System measures are the same as in the Video phase.
+
+The report pools a variant's completed sessions by adding up frames, seconds and delays, the way the Video phase verdicts pool frames.
 
 ## Quality metrics
 
@@ -104,3 +155,4 @@ Analysis scores the landmarks of every Run on the frames left after the 30 warm-
 - **Spread** lists, for each Model variant, Clip and machine, the FPS mean and range across completed repeats, the range as a percent of the mean, and the range of slowest-5% frame time.
 - **Summary table** shows each Model variant's pooled FPS, slowest-5% frame time, detection and PCK@0.2 (over all compared landmarks, so each Run counts by the landmarks it was scored on) on the Board and the Laptop baseline side by side, with the verdict. It is printed and written as `summary-table.png`.
 - **Charts** are `fps.png` (Board vs laptop, with the 10 FPS line), `frame-times.png` (Board, whiskers at the 5th and 95th percentile, with the 150 ms line), `accuracy-vs-speed.png` (PCK@0.2 against FPS) and `temperature.png` (the hottest Board Run of each variant). A chart with no data to show is not written.
+- **Webcam phase**: give the report the Webcam Campaign's directory too. The summary table then adds each variant's pooled Webcam FPS (processed), dropped % and delay (average / p95) after the verdict, and the variant reads `Lite (as-is)` when it failed the Pass criteria, or `Lite (no verdict)` when no Video phase Runs were given. The report prints a per-variant Webcam table and writes `webcam-fps.png` (camera FPS split into processed and dropped, with the 10 FPS line) and `webcam-delay.png` (capture to result, whiskers at the 5th and 95th percentile). Only Board sessions count.
