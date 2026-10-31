@@ -34,6 +34,8 @@ What it shows:
 - **Face blur:** placed where the face was when the frame was captured, between the poses found before and after it. That is hindsight only the drawing step has, which is fine because the blur is a privacy filter, not part of what the Board produced. A frame with no pose within 0.5 s is blurred in full, so a missed detection never shows a face. Blurring happens after pose estimation, so it does not change the landmarks.
 - **Caption:** "Lite (as-is) on the Board | live from the Brio 105 | skeleton shown as it arrived", with `|` because OpenCV's built-in fonts cannot draw `·`. It has no numbers: a Demo recording is not measured, and the preview adds some work on the Board. The FPS and delay belong on the Webcam results slide, from Analysis.
 
+Before sharing, open `webcam.png` and a frame from a fast-movement moment. Only real footage shows whether the blur is strong enough: the first one passed its tests and still showed a face.
+
 `--start` and `--length` (default 15 s) pick the window, in seconds from the first frame. Landmarks with visibility below 0.5 are not drawn.
 
 ## Demo recording files
