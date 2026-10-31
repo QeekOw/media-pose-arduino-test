@@ -41,8 +41,9 @@ def face_pose(dx=0.0):
     return face + [[0.45 + dx, 0.9, 0.0, 1.0]] * 22
 
 
-# On a 1000x1000 frame face_pose() spans 100 x 50 px around (450, 225), so its box is 2 x 100 px wide around it.
-BOX = (350, 125, 550, 325)
+# On a 1000x1000 frame face_pose() spans 100 x 50 px around (450, 225). Its box is 3 x 100 px square, centred a
+# quarter of that span lower to cover the chin and the hair.
+BOX = (300, 100, 600, 400)
 
 
 def test_a_frame_with_a_pose_blurs_a_padded_box_around_the_face():
@@ -60,8 +61,8 @@ def test_between_two_poses_the_box_moves_with_the_face():
 
     boxes = face_boxes(frames, 1000, 1000)
 
-    assert boxes[1] == (400, 125, 600, 325)
-    assert boxes[2] == (450, 125, 650, 325)
+    assert boxes[1] == (350, 100, 650, 400)
+    assert boxes[2] == (400, 100, 700, 400)
 
 
 def test_a_pose_on_only_one_side_within_half_a_second_still_places_the_box():
@@ -88,7 +89,7 @@ def test_a_frame_with_no_pose_within_half_a_second_is_blurred_whole():
 def test_the_box_is_clipped_to_the_frame():
     frames = [frame(0, 0.0, result_ms=200.0, landmarks=face_pose(dx=-0.4))]
 
-    assert face_boxes(frames, 1000, 1000) == [(0, 125, 150, 325)]
+    assert face_boxes(frames, 1000, 1000) == [(0, 100, 200, 400)]
 
 
 def test_the_window_keeps_frames_from_start_for_length_seconds_counted_from_the_first_frame():
