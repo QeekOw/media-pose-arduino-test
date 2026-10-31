@@ -1,13 +1,13 @@
 """Make one Demo recording on the Board: the camera's frames plus the pose results, for a Demo video.
 
-    python -m bench.demo_record --variant lite --seconds 30 | ffplay -f mjpeg -i -
+    python -m bench.demo_record --seconds 30 | ffplay -f mjpeg -i -
 
 A Demo recording is never a Session: it is not measured and never goes to Analysis (see GLOSSARY.md). It runs the
 Webcam phase's camera and one-frame-in-flight gate (ADR 0006), but opens the camera raw. Each JPEG the camera sends
 is saved as is, and only the frames sent to MediaPipe are decoded.
 
-While it runs, every third JPEG goes to stdout as a preview stream: for --lead-in seconds before recording starts,
-so the tester can get into frame, then for the whole recording. Messages go to stderr so they never mix with it.
+While it runs, every third JPEG goes to stdout as a preview stream: for --lead-in seconds before the Demo recording
+starts, so the tester can get into frame, then throughout it. Messages go to stderr so they never mix with it.
 """
 import argparse
 import sys
@@ -22,10 +22,14 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
-from bench.demo_recording import RecordingWriter
+from bench.demo_recording import DemoRecordingWriter
 from bench.live import DRAIN_S, CameraError, Gate, Result, Sent, open_camera
-from bench.models import VARIANTS, ensure_model
+from bench.models import ensure_model
 from bench.run_one import _landmarks, _sample_interval
+
+# Only Lite runs in the Webcam phase, as-is, because no Model variant met the Pass criteria (ADR 0004).
+VARIANT = "lite"
+PREVIEW_EVERY = 3
 
 
 def say(text: str) -> None:
@@ -35,14 +39,13 @@ def say(text: str) -> None:
 class Preview:
     """Sends JPEGs to stdout on its own thread, so a slow link drops preview frames instead of stalling the camera."""
 
-    def __init__(self, every: int) -> None:
-        self.every = every
+    def __init__(self) -> None:
         self._queue: Queue[bytes] = Queue(maxsize=2)
         self._out = sys.stdout.buffer
         threading.Thread(target=self._run, daemon=True).start()
 
     def offer(self, count: int, jpeg: bytes) -> None:
-        if count % self.every == 0:
+        if count % PREVIEW_EVERY == 0:
             try:
                 self._queue.put_nowait(jpeg)
             except Full:
@@ -54,25 +57,25 @@ class Preview:
                 self._out.write(self._queue.get())
                 self._out.flush()
         except (BrokenPipeError, OSError):
-            say("preview closed; recording carries on")
+            say("preview closed; the Demo recording carries on")
 
 
-def record(variant: str, seconds: float, lead_in: float, out_root: Path, models_dir: Path, preview_every: int) -> Path:
-    model = ensure_model(variant, models_dir)
+def record(seconds: float, lead_in: float, out_root: Path, models_dir: Path, preview: bool) -> Path:
+    model = ensure_model(VARIANT, models_dir)
     out_dir = out_root / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     try:
         camera = open_camera(raw=True)
     except CameraError as e:
         raise SystemExit(str(e))
-    preview = Preview(preview_every) if preview_every > 0 else None
+    stream = Preview() if preview else None
     results: SimpleQueue[Result] = SimpleQueue()
 
     def on_result(result, image, timestamp_ms: int) -> None:
         results.put(Result(timestamp_ms, time.monotonic() * 1000, _landmarks(result)))
 
-    with RecordingWriter(out_dir, {
+    with DemoRecordingWriter(out_dir, {
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "variant": variant,
+        "variant": VARIANT,
         "seconds": seconds,
         "model": {"file": model.path.name, "size_bytes": model.size_bytes, "sha256": model.sha256},
         "clip_info": camera.size,
@@ -106,8 +109,8 @@ def record(variant: str, seconds: float, lead_in: float, out_root: Path, models_
                         raise CameraError(f"camera stopped after {count} frames")
                     capture_ms, read_ms, raw = frame
                     jpeg = raw.tobytes()
-                    if preview:
-                        preview.offer(count, jpeg)
+                    if stream:
+                        stream.offer(count, jpeg)
                     count += 1
                     if start_ms is None:
                         start_ms = capture_ms + lead_in * 1000
@@ -115,7 +118,7 @@ def record(variant: str, seconds: float, lead_in: float, out_root: Path, models_
                         continue
                     if end_ms is None:
                         end_ms = capture_ms + seconds * 1000
-                        say(f"recording {seconds:g} s")
+                        say(f"Demo recording {seconds:g} s")
                     if capture_ms >= end_ms:
                         break
                     rec.add_jpeg(index, jpeg)
@@ -148,15 +151,13 @@ def record(variant: str, seconds: float, lead_in: float, out_root: Path, models_
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--variant", default="lite", choices=VARIANTS)
-    p.add_argument("--seconds", type=_sample_interval, default=30.0, help="length of the recording")
-    p.add_argument("--lead-in", type=float, default=10.0, help="seconds of preview before recording starts")
+    p.add_argument("--seconds", type=_sample_interval, default=30.0, help="length of the Demo recording")
+    p.add_argument("--lead-in", type=float, default=10.0, help="seconds of preview before the Demo recording starts")
     p.add_argument("--out-dir", type=Path, default=Path("runs-demo"))
     p.add_argument("--models-dir", type=Path, default=Path("models"))
-    p.add_argument("--preview-every", type=int, default=3, help="send every Nth frame to stdout as a preview")
     p.add_argument("--no-preview", action="store_true")
     a = p.parse_args()
-    record(a.variant, a.seconds, a.lead_in, a.out_dir, a.models_dir, 0 if a.no_preview else a.preview_every)
+    record(a.seconds, a.lead_in, a.out_dir, a.models_dir, not a.no_preview)
 
 
 if __name__ == "__main__":

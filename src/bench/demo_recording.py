@@ -16,7 +16,7 @@ DEMO = "demo"
 FRAMES, LOG = "frames.mjpeg", "demo.jsonl"
 
 
-class RecordingWriter:
+class DemoRecordingWriter:
     """Writes one Demo recording. Frames are stored as read; their lines are written once the gate settles them."""
 
     def __init__(self, directory: Path, header: dict) -> None:
@@ -47,7 +47,7 @@ class RecordingWriter:
         self._frames.close()
         self._log.close()
 
-    def __enter__(self) -> "RecordingWriter":
+    def __enter__(self) -> "DemoRecordingWriter":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -55,7 +55,7 @@ class RecordingWriter:
 
 
 @dataclass
-class Recording:
+class DemoRecording:
     directory: Path
     header: dict
     frames: list[LiveFrame]
@@ -69,7 +69,7 @@ class Recording:
             return f.read(length)
 
 
-def read_recording(directory: Path) -> Recording:
+def read_demo_recording(directory: Path) -> DemoRecording:
     header, frames, where, status = {}, [], {}, None
     lines = [line for line in (directory / LOG).read_text(encoding="utf-8").splitlines() if line.strip()]
     for n, line in enumerate(lines, 1):
@@ -89,4 +89,4 @@ def read_recording(directory: Path) -> Recording:
         elif record["type"] == "status":
             status = record["status"]
     frames.sort(key=lambda f: f.index)
-    return Recording(directory, header, frames, status, where)
+    return DemoRecording(directory, header, frames, status, where)

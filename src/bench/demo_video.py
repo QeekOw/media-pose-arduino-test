@@ -2,7 +2,7 @@
 
     python -m bench.demo_video video --run runs/board/video-20261031/video__lite__front__r1__board.jsonl
         --clip clips/front.mp4 --out report/demo/video-phase.mp4
-    python -m bench.demo_video webcam --recording runs-demo/<id> --out report/demo/webcam.mp4 --start 5
+    python -m bench.demo_video webcam --demo-recording runs-demo/<id> --out report/demo/webcam.mp4 --start 5
 
 Each MP4 is H.264 at the source's size, written by ffmpeg, with a PNG still from its middle. See docs/demo-videos.md.
 """
@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 from bench.analysis import summarize
-from bench.demo_recording import read_recording
+from bench.demo_recording import read_demo_recording
 from bench.runfile import LiveFrame, read_run
 
 Landmarks = list[list[float]]
@@ -180,9 +180,9 @@ def video_phase(run_path: Path, clip: Path, out: Path, start_s: float, length_s:
     cap.release()
 
 
-def webcam(recording_dir: Path, out: Path, start_s: float, length_s: float) -> None:
+def webcam(demo_recording: Path, out: Path, start_s: float, length_s: float) -> None:
     """The live view of a Demo recording, with the face blurred."""
-    rec = read_recording(recording_dir)
+    rec = read_demo_recording(demo_recording)
     size = rec.header["clip_info"]
     shown = live_view(rec.frames)
     boxes = face_boxes(rec.frames, size["width"], size["height"])
@@ -208,7 +208,7 @@ def main() -> None:
     v.add_argument("--run", type=Path, required=True)
     v.add_argument("--clip", type=Path, required=True)
     w = sub.add_parser("webcam", help="Part 2: a Demo recording in live view, face blurred")
-    w.add_argument("--recording", type=Path, required=True)
+    w.add_argument("--demo-recording", type=Path, required=True)
     for s in (v, w):
         s.add_argument("--out", type=Path, required=True)
         s.add_argument("--start", type=float, default=0.0, help="seconds from the first frame")
@@ -217,7 +217,7 @@ def main() -> None:
     if a.part == "video":
         video_phase(a.run, a.clip, a.out, a.start, a.length)
     else:
-        webcam(a.recording, a.out, a.start, a.length)
+        webcam(a.demo_recording, a.out, a.start, a.length)
     print(a.out)
 
 
