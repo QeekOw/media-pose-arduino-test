@@ -1,6 +1,7 @@
-"""Run the whole Video phase as one unattended Campaign, on the Board.
+"""Run the whole Video phase, or the Webcam phase's sessions, as one unattended Campaign on the Board.
 
     python -m bench.campaign --clips-dir clips --out-dir campaigns
+    python -m bench.campaign --webcam --seconds 60 --variants lite --out-dir campaigns
 """
 import argparse
 import json
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from bench.envinfo import default_machine_name
 from bench.models import VARIANTS
-from bench.runfile import run_file_name
+from bench.runfile import LIVE, VIDEO, WEBCAM, run_file_name
 from bench.sampler import read_temp_c
 
 STDERR_TAIL_CHARS = 500
@@ -65,6 +66,16 @@ class CampaignConfig:
     baseline_seconds: float
     sample_interval_s: float
     run_timeout_s: float
+    # None for the Video phase. For the Webcam phase, the length of each session, planned as the one clip "live".
+    session_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.session_s is not None and self.clips != (LIVE,):
+            raise ValueError(f"a Webcam phase Campaign plans the clip {LIVE!r} only, got {self.clips}")
+
+    @property
+    def phase(self) -> str:
+        return VIDEO if self.session_s is None else WEBCAM
 
 
 @dataclass(frozen=True)
@@ -125,6 +136,20 @@ def wait_until_cool(
         sleep(min(poll_s, timeout_s - waited))
         current = read_temp()
     return Cooldown(first, current, round(clock() - start, 1), False)
+
+
+def run_command(config: CampaignConfig, spec: RunSpec, campaign_dir: Path) -> list[str]:
+    """The child process for one Run: bench.run_one over a Clip, or bench.live for one Webcam phase session."""
+    common = [
+        "--variant", spec.variant,
+        "--repeat", str(spec.repeat),
+        "--machine", config.machine,
+        "--out-dir", str(campaign_dir),
+        "--sample-interval", str(config.sample_interval_s),
+    ]
+    if config.phase == WEBCAM:
+        return [sys.executable, "-m", "bench.live", *common, "--seconds", str(config.session_s)]
+    return [sys.executable, "-m", "bench.run_one", *common, "--clip", str(config.clips_dir / spec.clip)]
 
 
 def run_process(cmd: list[str], timeout_s: float) -> ProcessResult:
@@ -246,21 +271,15 @@ def run_campaign(
     save()
     for index, spec in enumerate(specs, 1):
         cooldown = wait_until_cool(read_temp, target_c, config.cooldown_timeout_s, poll_s, sleep, clock)
+        if config.phase == WEBCAM:
+            say(
+                f"[{index}/{len(specs)}] starting {spec.variant} {spec.clip} r{spec.repeat}: "
+                f"{config.session_s:g} s from the camera, move in front of the camera now"
+            )
         started_at, t0 = now(), clock()
-        result = run_process(
-            [
-                sys.executable, "-m", "bench.run_one",
-                "--variant", spec.variant,
-                "--clip", str(config.clips_dir / spec.clip),
-                "--repeat", str(spec.repeat),
-                "--machine", config.machine,
-                "--out-dir", str(campaign_dir),
-                "--sample-interval", str(config.sample_interval_s),
-            ],
-            config.run_timeout_s,
-        )
+        result = run_process(run_command(config, spec, campaign_dir), config.run_timeout_s)
         duration_s = round(clock() - t0, 1)
-        file = run_file_name(spec.variant, Path(spec.clip).stem, spec.repeat, config.machine)
+        file = run_file_name(spec.variant, Path(spec.clip).stem, spec.repeat, config.machine, config.phase)
         status, detail = settle_run_file(campaign_dir / file, result, config.run_timeout_s)
         records.append(
             RunRecord(
@@ -304,6 +323,8 @@ def _clip_name(text: str) -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Run every Model variant on every Clip, shuffled, cooling the Board between Runs.")
+    p.add_argument("--webcam", action="store_true", help="Webcam phase: live sessions from the camera instead of Clips")
+    p.add_argument("--seconds", type=_bounded(float, 0), default=60.0, help="length of each Webcam phase session")
     p.add_argument("--clips-dir", type=Path, default=Path("clips"))
     p.add_argument("--clips", nargs="+", type=_clip_name, help="Clip names (default: every .mp4 in --clips-dir)")
     p.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
@@ -316,11 +337,19 @@ def main() -> int:
     p.add_argument("--cooldown-timeout", type=_bounded(float, 0), default=600.0, help="seconds to wait before a Run")
     p.add_argument("--baseline-seconds", type=_bounded(float, 0), default=30.0)
     p.add_argument("--sample-interval", type=_bounded(float, 0), default=1.0, help="seconds between system samples")
-    p.add_argument("--run-timeout", type=_bounded(float, 0), default=1800.0, help="seconds before a hung Run is killed")
+    p.add_argument(
+        "--run-timeout", type=_bounded(float, 0),
+        help="seconds before a hung Run is killed (default: 1800, or the session length + 300 with --webcam)",
+    )
     p.add_argument("--print-plan", action="store_true", help="print the Run order for these inputs and seed, run nothing")
     a = p.parse_args()
 
-    clips = a.clips if a.clips is not None else sorted(f.name for f in a.clips_dir.glob("*.mp4"))
+    if a.webcam:
+        if a.clips is not None:
+            p.error("--clips does not apply to --webcam")
+        clips = [LIVE]
+    else:
+        clips = a.clips if a.clips is not None else sorted(f.name for f in a.clips_dir.glob("*.mp4"))
     if not clips:
         p.error(f"no .mp4 Clips in {a.clips_dir}")
     campaign_id = a.campaign_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -334,7 +363,7 @@ def main() -> int:
             print(f"{i} {s.variant} {s.clip} r{s.repeat}")
         return 0
 
-    missing = [c for c in clips if not (a.clips_dir / c).is_file()]
+    missing = [] if a.webcam else [c for c in clips if not (a.clips_dir / c).is_file()]
     if missing:
         p.error(f"Clips not found in {a.clips_dir}: {', '.join(missing)}")
     if (a.out_dir / campaign_id).exists():
@@ -354,7 +383,9 @@ def main() -> int:
             cooldown_timeout_s=a.cooldown_timeout,
             baseline_seconds=a.baseline_seconds,
             sample_interval_s=a.sample_interval,
-            run_timeout_s=a.run_timeout,
+            # Model load, camera set-up and the end-of-session drain come on top of the session itself.
+            run_timeout_s=a.run_timeout or (a.seconds + 300 if a.webcam else 1800.0),
+            session_s=a.seconds if a.webcam else None,
         )
     )
     return 0

@@ -377,7 +377,8 @@ def format_webcam_table(summaries: list[WebcamSummary]) -> str:
     rows = []
     for s in summaries:
         if s.stats is None:
-            live = ["0", f"too short (needs more than {WEBCAM_WARMUP_MS / 1000:g} s)", *["-"] * 5]
+            short = f"too short (needs more than {WEBCAM_WARMUP_MS / 1000:g} s)" if s.frames else "-"
+            live = ["0", short, *["-"] * 5]
         else:
             live = [
                 str(s.stats.camera_frames),

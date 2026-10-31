@@ -12,6 +12,7 @@ from bench.campaign import (
     measure_baseline,
     plan,
     run_campaign,
+    run_command,
     settle_run_file,
     wait_until_cool,
 )
@@ -322,3 +323,62 @@ def test_without_a_temperature_sensor_runs_start_at_once_and_say_so(tmp_path):
     assert log["baseline_c"] is None and log["target_c"] is None
     assert {r["cooldown"]["skipped"] for r in log["runs"]} == {"temperature unavailable"}
     assert log["totals"]["total_cooldown_s"] == 0
+
+
+def webcam_config(tmp_path, **overrides):
+    return make_config(tmp_path, **{"variants": ("lite",), "clips": ("live",), "repeats": 3, "session_s": 60.0, **overrides})
+
+
+def test_a_video_run_is_bench_run_one_over_its_clip(tmp_path):
+    config = make_config(tmp_path)
+
+    cmd = run_command(config, RunSpec("full", "a.mp4", 2), tmp_path / "out" / "c1")
+
+    assert cmd[1:3] == ["-m", "bench.run_one"]
+    args = dict(zip(cmd[3::2], cmd[4::2]))
+    assert args["--clip"] == str(tmp_path / "clips" / "a.mp4")
+    assert (args["--variant"], args["--repeat"], args["--machine"]) == ("full", "2", "board")
+
+
+def test_a_webcam_session_is_bench_live_for_the_session_length(tmp_path):
+    cmd = run_command(webcam_config(tmp_path), RunSpec("lite", "live", 3), tmp_path / "out" / "c1")
+
+    assert cmd[1:3] == ["-m", "bench.live"]
+    args = dict(zip(cmd[3::2], cmd[4::2]))
+    assert "--clip" not in args
+    assert (args["--variant"], args["--repeat"], args["--seconds"]) == ("lite", "3", "60.0")
+
+
+def test_a_webcam_campaign_cannot_plan_clips(tmp_path):
+    with pytest.raises(ValueError):
+        make_config(tmp_path, clips=("a.mp4",), session_s=60.0)
+
+
+def test_a_webcam_campaign_runs_each_session_into_a_webcam_run_file_and_announces_it(tmp_path):
+    calls = []
+
+    def camera(cmd, timeout_s):
+        args = dict(zip(cmd[3::2], cmd[4::2]))
+        calls.append((cmd[2], args["--repeat"]))
+        path = Path(args["--out-dir"]) / run_file_name("lite", "live", int(args["--repeat"]), "board", "webcam")
+        write_lines(path, {**HEADER, "phase": "webcam", "clip": "live", "repeat": int(args["--repeat"])},
+                    {"type": "status", "status": "completed", "detail": ""})
+        return ProcessResult(0, "", False)
+
+    log, lines = run(tmp_path, camera, webcam_config(tmp_path))
+
+    assert sorted(calls) == [("bench.live", "1"), ("bench.live", "2"), ("bench.live", "3")]
+    assert sorted(r["file"] for r in log["runs"]) == [f"webcam__lite__live__r{n}__board.jsonl" for n in (1, 2, 3)]
+    assert log["totals"]["status_counts"] == {"completed": 3}
+    starts = [i for i, line in enumerate(lines) if "move in front of the camera now" in line]
+    assert len(starts) == 3
+    assert all("60 s from the camera" in lines[i] and "completed" in lines[i + 1] for i in starts)
+
+
+def test_a_session_that_never_opened_the_camera_gets_a_failed_webcam_run_file(tmp_path):
+    log, _ = run(tmp_path, lambda cmd, timeout_s: ProcessResult(1, "expected one camera, found 0", False),
+                 webcam_config(tmp_path, repeats=1))
+
+    (only,) = log["runs"]
+    assert only["file"] == "webcam__lite__live__r1__board.jsonl"
+    assert (only["status"], only["detail"]) == ("crashed", "exit code 1: expected one camera, found 0")
