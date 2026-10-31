@@ -774,10 +774,6 @@ def build(n: Numbers, out: Path) -> Path:
             + " Laptop repeats varied more than the Board's (appendix A), since the laptop ran other software. "
             + provenance_note))
     fps_bar_chart(s, n, MARGIN, Inches(2.0), Inches(9.5), Inches(4.9), machines=(BOARD, LAPTOP), pass_bar=False)
-    add_bullets(s, MARGIN + Inches(9.9), Inches(2.6), Inches(2.3), Inches(4), [
-        f"Agreement with Heavy matches within {max(abs(v.pck - v.laptop_pck) for v in (lite, full)):.1f} points"
-        f"| for Lite and Full",
-    ], size=16)
 
     # 7 Left out ---------------------------------------------------------------------------------------
     s = d.slide(
@@ -882,7 +878,7 @@ def build(n: Numbers, out: Path) -> Path:
         "Appendix B: the three webcam Sessions",
         section="Appendix",
         notes=("Lite (as-is) on the Board, Campaign " + WEBCAM_CAMPAIGN + ". " + provenance_note))
-    rows = [["Session", "Camera FPS", "Processed FPS", "Skipped", "Delay avg", "Delay p95", "Person found",
+    rows = [["Session", "Camera FPS", "Processed FPS", "Dropped", "Delay avg", "Delay p95", "Person found",
              "Peak RSS", "Max temp"]]
     for x in n.webcam_sessions:
         st = x.stats
