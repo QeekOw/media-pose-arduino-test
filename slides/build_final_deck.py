@@ -94,6 +94,8 @@ class VariantNumbers:
     fps_empty: float
     max_temp_c: float
     peak_rss_mb: int
+    false_detection: float
+    jitter: float
 
     @property
     def name(self) -> str:
@@ -139,6 +141,8 @@ def compute() -> Numbers:
             fps_empty=pooled_fps(empty),
             max_temp_c=max(r.max_temp_c for r in runs if r.max_temp_c is not None),
             peak_rss_mb=max(r.peak_rss_mb for r in runs if r.peak_rss_mb is not None),
+            false_detection=float(np.mean([r.false_detection_rate for r in empty])),
+            jitter=float(np.mean([r.jitter for r in runs if clip_stem(r.clip) == "front"])),
         )
     live = webcam_sessions(sessions)
     demo = next(s for s in summaries if (ROOT / DEMO_RUN).name.startswith(
@@ -299,7 +303,7 @@ def axis_line(axis, color=LINE):
 # ---------------------------------------------------------------- charts
 
 
-def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,), axis_max=None):
+def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,), axis_max=None, pass_bar=True):
     """Horizontal bars, one group per variant; a dashed line at the 10 FPS bar is drawn over the plot."""
     data = CategoryChartData()
     order = list(reversed(VARIANTS))
@@ -342,6 +346,8 @@ def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,)
         chart.legend.font.size = Pt(14)
     px, py, pw, ph = 0.12, 0.1 if len(machines) > 1 else 0.04, 0.84, 0.86 if len(machines) > 1 else 0.92
     manual_plot_area(chart, px, py, pw, ph)
+    if not pass_bar:
+        return
     x = left + int(width * (px + pw * FPS_BAR / top_value))
     y1, y2 = top + int(height * py) - Inches(0.05), top + int(height * (py + ph))
     vline(slide, x, y1, y2, FAIL)
@@ -362,7 +368,7 @@ def frame_time_png(n: Numbers, path: Path) -> Path:
     ax.set_xticks(range(1, len(VARIANTS) + 1), [v.capitalize() for v in VARIANTS], fontsize=17,
                   fontweight="bold", color="#1F2937")
     ax.axhline(P95_BAR, color="#B42318", linestyle="--", linewidth=1.6)
-    ax.text(0.55, P95_BAR - 45, f"Pass bar: slowest 5% within {P95_BAR:g} ms", color="#B42318", ha="left",
+    ax.text(0.55, P95_BAR - 45, f"Pass bar: p95 ≤ {P95_BAR:g} ms", color="#B42318", ha="left",
             fontsize=13, fontweight="bold")
     ax.set_ylabel("time per frame (ms)", color="#5B6573")
     ax.set_ylim(0, None)
@@ -420,7 +426,7 @@ def temperature_chart(slide, n: Numbers, left, top, width, height):
     colors = {"lite": ACCENT, "full": MUTED, "heavy": WARN}
     for v in VARIANTS:
         run = max(n.board_runs[v], key=lambda r: max((t for _, t in r.temps), default=0))
-        s = data.add_series(v.capitalize())
+        s = data.add_series(f"{v.capitalize()} ({clip_stem(run.clip)} Clip)")
         t0 = run.temps[0][0]
         for t, c in run.temps:
             s.add_data_point((t - t0) / 1000 / 60, c)
@@ -559,8 +565,8 @@ def build(n: Numbers, out: Path) -> Path:
     # 1 Recommendation ---------------------------------------------------------------------------------
     s = d.slide(
         "Use Lite. No model reached real-time on the Board, and Lite came closest",
-        sub=f"Lite reaches {pct(100 * lite.fps / FPS_BAR)} of the {FPS_BAR:g} FPS bar, finds the person almost "
-            f"every time, and is nearly as accurate as Full.",
+        sub=f"It reaches {pct(100 * lite.fps / FPS_BAR)} of the {FPS_BAR:g} FPS bar, so it fits uses where about "
+            f"{lite.fps:.0f} pose updates a second is enough.",
         section="Recommendation",
         notes=(
             f"All three Model variants failed our Pass criteria, and all on speed only. Detection passed everywhere. "
@@ -573,23 +579,22 @@ def build(n: Numbers, out: Path) -> Path:
     top = Inches(2.35)
     tiles = [
         (f"{lite.fps:.1f} FPS", "average speed on the Board", (f"Pass bar {FPS_BAR:g} FPS: not met", 13, FAIL, True)),
-        (f"{lite.p95_ms:.0f} ms", "slowest 5% of frames", (f"Pass bar {P95_BAR:g} ms: not met", 13, FAIL, True)),
+        (f"{lite.p95_ms:.0f} ms", "p95 frame time (95% of frames are faster)",
+         (f"Pass bar {P95_BAR:g} ms: not met", 13, FAIL, True)),
         (f"{lite.detection:.0f}%", "of frames with a person found",
          (f"Pass bar {DETECT_BAR:g}%: met", 13, PASS, True)),
     ]
     for i, (value, label, verdict) in enumerate(tiles):
         stat_tile(s, MARGIN + i * (tile_w + gap), top, tile_w, tile_h, value, label, verdict)
-    rows = [["", "Speed on the Board", "Agreement with Heavy", "Verdict"]]
-    colors = {}
-    for r, v in enumerate((lite, full, heavy), start=1):
-        rows.append([v.name, f"{v.fps:.1f} FPS", f"{v.pck:.1f}%", "PASS" if v.passed else "FAIL on speed"])
-        colors[(r, 3)] = PASS if v.passed else FAIL
-    table(s, MARGIN, Inches(4.55), CONTENT_W, rows, [2.2, 3, 3, 3], row_h=Inches(0.5), highlight_row=1,
-          cell_colors=colors)
+    add_bullets(s, MARGIN, Inches(4.75), CONTENT_W, Inches(1.6), [
+        f"Full|: {pct(100 * (1 - full.fps / lite.fps))} slower than Lite, for {full.pck - lite.pck:.1f} points more "
+        "agreement with Heavy",
+        f"Heavy|: {heavy.fps:.1f} FPS, {lite.fps / heavy.fps:.1f}× slower than Lite",
+    ], size=18, gap=0.8)
 
     # 2 Method -----------------------------------------------------------------------------------------
     s = d.slide(
-        "Three models, run on the Board itself, first on video and then on a live webcam",
+        "All three models ran on video on the Board; Lite alone went on to a live webcam",
         section="Method",
         notes=(
             "Same method as the slide sent before the measurements, now carried out. "
@@ -611,8 +616,9 @@ def build(n: Numbers, out: Path) -> Path:
             "Laptop baseline|: the same Clips on the laptop",
         ]),
         ("WHAT COUNTS", [
-            f"Pass bar (ours)|: ≥ {FPS_BAR:g} FPS, slowest 5% ≤ {P95_BAR:g} ms, person found ≥ {DETECT_BAR:g}%",
-            "Accuracy|: agreement with Heavy on the laptop, not hand-labelled truth",
+            f"Pass bar (ours)|: ≥ {FPS_BAR:g} FPS, p95 frame time ≤ {P95_BAR:g} ms, person found ≥ "
+            f"{DETECT_BAR:g}%, no failed Runs",
+            "Agreement with Heavy|: PCK@0.2 against Heavy on the laptop, a stand-in for hand-labelled truth",
         ]),
     ]
     for i, (label, items) in enumerate(columns):
@@ -623,13 +629,18 @@ def build(n: Numbers, out: Path) -> Path:
 
     # 3 Summary table ----------------------------------------------------------------------------------
     s = d.slide(
-        "All three models failed on speed alone; every model found the person in 98% of frames or more",
+        f"All three models failed on speed alone; each found the person in "
+        f"{min(v.detection for v in n.variants.values()):.0f}% of frames or more",
         section="Results",
         notes=(
             "Board and laptop numbers pool every frame of the 15 Runs per model (5 Clips × 3 repeats), after warm-up. "
             "Agreement with Heavy is PCK@0.2 against Heavy on the laptop, so Heavy is high partly by construction. "
+            "False detections on the empty-room Clip (frames with a person reported): "
+            + ", ".join(f"{v.name} {v.false_detection:.1f}%" for v in (lite, full, heavy))
+            + ". Jitter on the front Clip, in torso lengths: "
+            + ", ".join(f"{v.name} {v.jitter:.4f}" for v in (lite, full, heavy)) + ". "
             + provenance_note))
-    hdr = ["", f"FPS\nbar ≥ {FPS_BAR:g}", f"Slowest 5%\nbar ≤ {P95_BAR:g} ms", f"Person found\nbar ≥ {DETECT_BAR:g}%",
+    hdr = ["", f"FPS\nbar ≥ {FPS_BAR:g}", f"p95 frame time\nbar ≤ {P95_BAR:g} ms", f"Person found\nbar ≥ {DETECT_BAR:g}%",
            "Agreement\nwith Heavy", "Laptop\nFPS", "Verdict"]
     rows, colors = [hdr], {}
     for r, v in enumerate((lite, full, heavy), start=1):
@@ -663,32 +674,30 @@ def build(n: Numbers, out: Path) -> Path:
     png = frame_time_png(n, CHART_DIR / "frame-times.png")
     s = d.slide(
         f"The slowness is steady, not occasional: Lite's typical frame takes {lite.median_ms:.0f} ms",
-        sub=f"The {P95_BAR:g} ms bar fails because every frame is slow, not because of a few spikes.",
+        sub=f"The p95 bar of {P95_BAR:g} ms fails because every frame is slow, not because of a few spikes.",
         section="Video phase",
         notes=(
             "Box: middle half of frames. Whiskers: 5th to 95th percentile. "
             f"Median frame time: Lite {lite.median_ms:.0f} ms, Full {full.median_ms:.0f} ms, Heavy {heavy.median_ms:.0f} ms. "
-            f"Slowest 5% (p95): Lite {lite.p95_ms:.0f}, Full {full.p95_ms:.0f}, Heavy {heavy.p95_ms:.0f} ms. "
+            f"95th percentile (p95): Lite {lite.p95_ms:.0f}, Full {full.p95_ms:.0f}, Heavy {heavy.p95_ms:.0f} ms. "
             "Heavy's low whisker is the empty-room Clip, where only the person detector runs. " + provenance_note))
     s.shapes.add_picture(str(png), MARGIN + Inches(1.2), Inches(2.0), height=Inches(5.0))
 
     # 4c accuracy vs speed -----------------------------------------------------------------------------
     s = d.slide(
-        f"Full buys {full.pck - lite.pck:.1f} points of accuracy for {pct(100 * (1 - full.fps / lite.fps))} "
+        f"Full agrees with Heavy {full.pck - lite.pck:.1f} points more, at {pct(100 * (1 - full.fps / lite.fps))} "
         "less speed; Lite is the better trade",
         section="Video phase",
         notes=(
             f"Agreement with Heavy on the laptop (PCK@0.2): Lite {lite.pck:.1f}%, Full {full.pck:.1f}%, "
             f"Heavy {heavy.pck:.1f}%. Heavy's score is high partly by construction: it is compared with itself, "
-            "run on a different machine. The Board gives the same answers as the laptop: "
+            "run on a different machine. Board and laptop scores are close: "
             f"Lite {lite.pck:.1f}% on the Board vs {lite.laptop_pck:.1f}% on the laptop. " + provenance_note))
     scatter_chart(s, n, MARGIN, Inches(1.95), Inches(8.2), Inches(5.0))
-    add_bullets(s, MARGIN + Inches(8.6), Inches(2.3), Inches(3.5), Inches(4.2), [
-        f"Lite|: {lite.fps:.1f} FPS, {lite.pck:.1f}%",
-        f"Full|: {full.fps:.1f} FPS, {full.pck:.1f}%",
-        f"Heavy|: {heavy.fps:.1f} FPS, {heavy.pck:.1f}%",
-        "Heavy scores high partly because it is the reference",
-    ], size=17, gap=0.9)
+    add_text(s, MARGIN + Inches(8.7), Inches(2.4), Inches(3.4), Inches(3), [
+        ("Heavy scores high partly because it is the reference it is scored against.", 17, MUTED, False),
+        ("Higher means closer to Heavy, not proven correct.", 17, MUTED, False),
+    ])
 
     # 4d Demo video: Clip ------------------------------------------------------------------------------
     demo = n.demo_run
@@ -711,7 +720,7 @@ def build(n: Numbers, out: Path) -> Path:
     s = d.slide(
         f"Live, Lite keeps up with {w.processed_fps:.0f} of {w.camera_fps:.0f} camera frames a second, "
         f"about {w.delay_avg_ms / 1000:.1f} s late",
-        sub="Speed matches the Video phase. The person is still found in almost every processed frame.",
+        sub="One frame goes to MediaPipe at a time; camera frames that arrive meanwhile are dropped (ADR 0006).",
         section="Webcam phase",
         notes=(
             f"Lite, labelled 'as-is' because it failed the Pass criteria (ADR 0004). {len(n.webcam_sessions)} Sessions "
@@ -725,7 +734,7 @@ def build(n: Numbers, out: Path) -> Path:
             + f" FPS. {n.made_by_extra}. " + provenance_note))
     tiles = [
         (f"{w.processed_fps:.1f} FPS", f"processed, of {w.camera_fps:.0f} from the camera"),
-        (f"{w.dropped_pct:.0f}%", "of camera frames skipped"),
+        (f"{w.dropped_pct:.0f}%", "of camera frames dropped"),
         (f"{w.delay_avg_ms:.0f} ms", f"capture to result (p95 {w.delay_p95_ms:.0f} ms)"),
         (f"{w.detection_rate:.0f}%", "of processed frames with a person found"),
     ]
@@ -754,9 +763,8 @@ def build(n: Numbers, out: Path) -> Path:
 
     # 6 Laptop baseline --------------------------------------------------------------------------------
     s = d.slide(
-        f"The same models run {best_laptop_ratio:.0f}–{worst_laptop_ratio:.0f}× faster on the laptop, "
-        "with the same answers",
-        sub="The Board's CPU is the bottleneck, not the models or the code.",
+        f"The same models run {best_laptop_ratio:.1f}–{worst_laptop_ratio:.1f}× faster on the laptop",
+        sub="Lite and Full agree with Heavy about as well on the Board as on the laptop: slower, not worse.",
         section="Laptop baseline",
         notes=(
             "Laptop baseline: the same Clips, the same mediapipe 0.10.18 and Python 3.12, on the Windows laptop's CPU. "
@@ -765,7 +773,7 @@ def build(n: Numbers, out: Path) -> Path:
                        for v in (lite, full, heavy))
             + " Laptop repeats varied more than the Board's (appendix A), since the laptop ran other software. "
             + provenance_note))
-    fps_bar_chart(s, n, MARGIN, Inches(2.0), Inches(9.5), Inches(4.9), machines=(BOARD, LAPTOP))
+    fps_bar_chart(s, n, MARGIN, Inches(2.0), Inches(9.5), Inches(4.9), machines=(BOARD, LAPTOP), pass_bar=False)
     add_bullets(s, MARGIN + Inches(9.9), Inches(2.6), Inches(2.3), Inches(4), [
         f"Agreement with Heavy matches within {max(abs(v.pck - v.laptop_pck) for v in (lite, full)):.1f} points"
         f"| for Lite and Full",
@@ -813,7 +821,7 @@ def build(n: Numbers, out: Path) -> Path:
             "per-frame timings, not profiled; in both webcam Campaigns the second Session was the fastest, which is "
             "not explained."))
     add_bullets(s, MARGIN, Inches(1.9), Inches(6.4), Inches(5), [
-        "Accuracy is agreement with Heavy|, not hand-labelled ground truth",
+        "The accuracy score is agreement with Heavy|, not hand-labelled ground truth",
         f"No heatsink|: the Board peaked at {max_temp:.0f} °C; its effect on speed is untested",
         "The Pass bars are ours|, not from a standard",
         "Some details are unverified|: the webcam delay split, why Session 2 ran fastest",
@@ -827,12 +835,12 @@ def build(n: Numbers, out: Path) -> Path:
         "Next: try to close the speed gap, then measure true accuracy",
         section="Next steps",
         notes=(
-            "Ordered by how directly each answers the open question. Acceleration is the only step that could plausibly "
-            f"close a {FPS_BAR / lite.fps:.1f}× gap; a heatsink only matters if the Board throttles. "
+            "Ordered by how directly each answers the open question. Acceleration is the most likely way to narrow "
+            f"a {FPS_BAR / lite.fps:.1f}× gap, though untested here; a heatsink only matters if the Board throttles. "
             "Penn Action has hand-labelled joints, which would replace the Heavy stand-in. "
             "App Lab is Arduino's own way to ship an app (ADR 0001)."))
     steps = [
-        ("1", "LiteRT or GPU acceleration", f"The only step that could close a {FPS_BAR / lite.fps:.1f}× speed gap"),
+        ("1", "LiteRT or GPU acceleration", f"Could narrow the {FPS_BAR / lite.fps:.1f}× speed gap; untested on the UNO Q"),
         ("2", "Heatsink comparison", "Same Campaign with a heatsink, to see if heat limits speed"),
         ("3", "A labelled dataset such as Penn Action", "Accuracy against real ground truth, not Heavy"),
         ("4", "An App Lab demo", "Lite packaged the way Arduino ships apps"),
@@ -847,14 +855,18 @@ def build(n: Numbers, out: Path) -> Path:
             hline(s, MARGIN + Inches(0.8), SLIDE_W - MARGIN, top + row_h - Inches(0.12), LINE, 0.75, dash=False)
 
     # Appendix A: spread --------------------------------------------------------------------------------
+    rows_spread = spread(n.summaries)
+    pcts = {m: [x.fps_spread_pct for x in rows_spread if x.machine == m] for m in (BOARD, LAPTOP)}
+    spread_note = (f"FPS spread across repeats (range as % of mean): Board {min(pcts[BOARD]):.1f}–"
+                   f"{max(pcts[BOARD]):.1f}%, laptop {min(pcts[LAPTOP]):.1f}–{max(pcts[LAPTOP]):.1f}%.")
     s = d.slide(
-        "Appendix A: repeats agreed closely on the Board",
+        "Appendix A: repeats agreed closely on the Board, less so on the laptop",
         section="Appendix",
-        notes=("FPS mean and range across the 3 repeats of each model and Clip, and the range of the slowest-5% frame "
-               "time. Board spread stays within a few percent; the laptop varied more. " + provenance_note))
-    rows = [["Model", "Clip", "Board FPS\nmean (min–max)", "Board slowest 5%\nms (min–max)",
+        notes=("FPS mean and range across the 3 repeats of each model and Clip, and the range of the p95 frame "
+               "time. " + spread_note + " " + provenance_note))
+    rows = [["Model", "Clip", "Board FPS\nmean (min–max)", "Board p95 frame time\nms (min–max)",
              "Laptop FPS\nmean (min–max)"]]
-    by_key = {(x.variant, x.clip, x.machine): x for x in spread(n.summaries)}
+    by_key = {(x.variant, x.clip, x.machine): x for x in rows_spread}
     for v in VARIANTS:
         for clip in ("front", "side", "fast", "far", "empty"):
             b, lap = by_key[(v, clip, BOARD)], by_key[(v, clip, LAPTOP)]
@@ -871,7 +883,7 @@ def build(n: Numbers, out: Path) -> Path:
         section="Appendix",
         notes=("Lite (as-is) on the Board, Campaign " + WEBCAM_CAMPAIGN + ". " + provenance_note))
     rows = [["Session", "Camera FPS", "Processed FPS", "Skipped", "Delay avg", "Delay p95", "Person found",
-             "Peak RAM", "Max temp"]]
+             "Peak RSS", "Max temp"]]
     for x in n.webcam_sessions:
         st = x.stats
         rows.append([str(x.session), f"{st.camera_fps:.1f}", f"{st.processed_fps:.1f}", f"{st.dropped_pct:.1f}%",
