@@ -25,8 +25,8 @@ NONE_PASSED = (
     'No Model variant passed the Pass criteria, so the Webcam phase falls back to an "as-is" Lite demo.'
 )
 WEBCAM_TITLE = (
-    f"Webcam phase (Board, live camera in LIVE_STREAM mode, the first {WEBCAM_WARMUP_MS / 1000:g} s of each session"
-    " is warm-up; delay runs from capture to result, so it includes time the frame waited inside MediaPipe)"
+    f"Webcam phase (Board, live camera in LIVE_STREAM mode with one frame at a time in MediaPipe, the first"
+    f" {WEBCAM_WARMUP_MS / 1000:g} s of each session is warm-up; delay runs from capture to result)"
 )
 STYLE = {"font.size": 16, "axes.titlesize": 20, "axes.spines.top": False, "axes.spines.right": False}
 COLORS = {BOARD: "#0B5C8A", LAPTOP: "#9AA5B1"}

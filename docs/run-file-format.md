@@ -80,17 +80,17 @@ Frame time is `video_ms + model_ms`.
 {"type": "live_frame", "index": 42, "capture_ms": 5123490.1, "read_ms": 5123503.0, "result_ms": null, "dropped": true, "landmarks": null}
 ```
 
-One line per camera frame the program read, in the Webcam phase. Every frame read goes to MediaPipe in LIVE_STREAM mode. Times are milliseconds on the Board's monotonic clock; only differences mean anything.
+One line per camera frame the program read, in the Webcam phase. The program reads every frame the camera delivers but lets only one at a time into MediaPipe, in LIVE_STREAM mode: it sends a frame only when the previous one's result has come back. Times are milliseconds on the Board's monotonic clock; only differences mean anything.
 
 - `capture_ms` is when the frame was captured (see `capture_clock` in the header).
 - `read_ms` is when `read()` returned it. Analysis flags `capture clock off` when the two are more than 1 s apart, or in the wrong order, after warm-up.
-- `result_ms` is when MediaPipe's result callback ran for the frame, or `null` when no result ever came back.
-- `dropped` is `true` exactly when `result_ms` is `null`: MediaPipe skipped the frame, or still held it 1 s after the session ended.
+- `result_ms` is when MediaPipe's result callback ran for the frame, or `null` when it has none.
+- `dropped` is `true` exactly when `result_ms` is `null`: the frame was read while another was in MediaPipe, so it was never sent, or it was sent and its result had not come back 1 s after the session ended.
 - `landmarks` is as in `frame`, and always `null` on a dropped frame.
 
-A line is written once the frame's fate is known, so a crash loses only the frames still waiting for a result. A line whose `dropped` disagrees with `result_ms`, whose result comes before its capture, or that has landmarks on a dropped frame is a corrupt line.
+A line is written once the frame's fate is known. A frame dropped while another is in MediaPipe is written right after that one, to keep frame order, so a crash loses the frame in MediaPipe and those dropped behind it. A line whose `dropped` disagrees with `result_ms`, whose result comes before its capture, or that has landmarks on a dropped frame is a corrupt line.
 
-Delay is `result_ms - capture_ms`: from capture to result. It includes any time the frame waited inside MediaPipe before the model ran. MediaPipe's LIVE_STREAM flow limiter is configured to keep one frame waiting and skip the rest, which would cap that wait at about one model time. On the Dev machine, `mediapipe` 0.10.18 skipped no frames and queued about 100 instead, so check the Board's delay over time before reading its average.
+Delay is `result_ms - capture_ms`: from capture to result, over the frames MediaPipe got. With one frame in MediaPipe at a time, no frame waits there behind another. The program gates frames itself because `mediapipe` 0.10.18 queues LIVE_STREAM frames instead of skipping them: fed every frame, a 10 s Lite session on the Board reached 8.8 s of delay within 2.8 s of capture and slowed the read loop to about 6 frames a second (ADR 0006).
 
 ## `sample`
 
