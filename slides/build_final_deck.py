@@ -355,6 +355,45 @@ def fps_bar_chart(slide, n: Numbers, left, top, width, height, machines=(BOARD,)
              [(f"Pass bar: {FPS_BAR:g} FPS", 13, FAIL, True, PP_ALIGN.CENTER)])
 
 
+def session_chart(slide, n: Numbers, left, top, width, height):
+    """Processed FPS per webcam Session, with the Video phase speed of the same model as a dashed line."""
+    data = CategoryChartData()
+    data.categories = [f"Session {x.session}" for x in n.webcam_sessions]
+    data.add_series("Processed FPS", [x.stats.processed_fps for x in n.webcam_sessions])
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, left, top, width, height, data).chart
+    style_chart(chart, 13)
+    chart.has_title = False
+    chart.has_legend = False
+    video_fps = n.variants["lite"].fps
+    top_value = max(*(x.stats.processed_fps for x in n.webcam_sessions), video_fps) * 1.15
+    va = chart.value_axis
+    va.minimum_scale, va.maximum_scale = 0, top_value
+    va.visible = False
+    hide_gridlines(va)
+    ca = chart.category_axis
+    ca.tick_labels.font.size = Pt(13)
+    ca.tick_labels.font.color.rgb = MUTED
+    axis_line(ca)
+    plot = chart.plots[0]
+    plot.gap_width = 80
+    plot.has_data_labels = True
+    labels = plot.data_labels
+    labels.number_format, labels.number_format_is_linked = '0.0" FPS"', False
+    labels.position = XL_LABEL_POSITION.INSIDE_END
+    labels.font.size, labels.font.bold = Pt(14), True
+    labels.font.color.rgb = WHITE
+    series = plot.series[0]
+    series.format.fill.solid()
+    series.format.fill.fore_color.rgb = ACCENT
+    px, py, pw, ph = 0.02, 0.04, 0.78, 0.84
+    manual_plot_area(chart, px, py, pw, ph)
+    y = top + int(height * (py + ph * (1 - video_fps / top_value)))
+    x_end = left + int(width * (px + pw))
+    hline(slide, left + int(width * px), x_end + Inches(0.1), y, MUTED, 1.25)
+    add_text(slide, x_end + Inches(0.18), y - Inches(0.25), Inches(1.5), Inches(0.5),
+             [("Video phase", 12, MUTED, True), (f"{video_fps:.1f} FPS", 12, MUTED, True)])
+
+
 def frame_time_png(n: Numbers, path: Path) -> Path:
     plt.rcParams.update({"font.family": "Calibri", "font.size": 15, "axes.spines.top": False,
                          "axes.spines.right": False, "axes.edgecolor": "#D0D7DE", "xtick.color": "#5B6573",
@@ -639,6 +678,12 @@ def build(n: Numbers, out: Path) -> Path:
             + ", ".join(f"{v.name} {v.false_detection:.1f}%" for v in (lite, full, heavy))
             + ". Jitter on the front Clip, in torso lengths: "
             + ", ".join(f"{v.name} {v.jitter:.4f}" for v in (lite, full, heavy)) + ". "
+            f"Full is {pct(100 * (1 - full.fps / lite.fps))} slower than Lite; Heavy is {lite.fps / heavy.fps:.1f}× "
+            f"slower. On the empty-room Clip all three run at about {lite.fps_empty:.0f} FPS "
+            f"(Lite {lite.fps_empty:.1f}, Full {full.fps_empty:.1f}, Heavy {heavy.fps_empty:.1f}): with no person "
+            "found, only the person detector runs, not the pose model. Without that Clip: "
+            f"Lite {lite.fps_without_empty:.1f}, Full {full.fps_without_empty:.1f}, "
+            f"Heavy {heavy.fps_without_empty:.1f} FPS. "
             + provenance_note))
     hdr = ["", f"FPS\nbar ≥ {FPS_BAR:g}", f"p95 frame time\nbar ≤ {P95_BAR:g} ms", f"Person found\nbar ≥ {DETECT_BAR:g}%",
            "Agreement\nwith Heavy", "Laptop\nFPS", "Verdict"]
@@ -654,21 +699,6 @@ def build(n: Numbers, out: Path) -> Path:
     add_text(s, MARGIN, Inches(5.5), CONTENT_W, Inches(0.8), [
         ("Red: misses the Pass bar. Speed numbers are the Board's; the laptop column is for comparison only.",
          14, MUTED, False)])
-
-    # 4a FPS -------------------------------------------------------------------------------------------
-    s = d.slide(
-        f"On the Board, Lite is the fastest at {lite.fps:.1f} FPS, about half the {FPS_BAR:g} FPS bar",
-        sub=f"Full is {pct(100 * (1 - full.fps / lite.fps))} slower than Lite; Heavy is "
-            f"{lite.fps / heavy.fps:.1f}× slower.",
-        section="Video phase",
-        notes=(
-            "Average FPS over all frames of all 15 Runs per model on the Board. "
-            f"On the empty-room Clip all three run at about {lite.fps_empty:.0f} FPS "
-            f"(Lite {lite.fps_empty:.1f}, Full {full.fps_empty:.1f}, Heavy {heavy.fps_empty:.1f}): with no person "
-            "found, only the person detector runs, not the pose model. Without that Clip: "
-            f"Lite {lite.fps_without_empty:.1f}, Full {full.fps_without_empty:.1f}, Heavy {heavy.fps_without_empty:.1f} FPS. "
-            "Repeats agreed closely on the Board (appendix A). " + provenance_note))
-    fps_bar_chart(s, n, MARGIN, Inches(2.0), Inches(9.5), Inches(4.8))
 
     # 4b frame times -----------------------------------------------------------------------------------
     png = frame_time_png(n, CHART_DIR / "frame-times.png")
@@ -718,8 +748,8 @@ def build(n: Numbers, out: Path) -> Path:
 
     # 5a Webcam ----------------------------------------------------------------------------------------
     s = d.slide(
-        f"Live, Lite keeps up with {w.processed_fps:.0f} of {w.camera_fps:.0f} camera frames a second, "
-        f"about {w.delay_avg_ms / 1000:.1f} s late",
+        f"Live, Lite updates the pose about {w.processed_fps:.0f} times a second, "
+        f"about {w.delay_avg_ms / 1000:.1f} s behind",
         sub="One frame goes to MediaPipe at a time; camera frames that arrive meanwhile are dropped (ADR 0006).",
         section="Webcam phase",
         notes=(
@@ -740,10 +770,11 @@ def build(n: Numbers, out: Path) -> Path:
     ]
     tile_w = (CONTENT_W - 3 * Inches(0.25)) / 4
     for i, (value, label) in enumerate(tiles):
-        stat_tile(s, MARGIN + i * (tile_w + Inches(0.25)), Inches(2.5), tile_w, Inches(1.9), value, label)
-    add_text(s, MARGIN, Inches(4.85), CONTENT_W, Inches(1.5), [
-        (f"Video phase, same model: {lite.fps:.1f} FPS. "
-         f"Webcam: {len(n.webcam_sessions)} Sessions × 60 s, Brio 105 at 1280×720, 30 fps.", 15, MUTED, False)])
+        stat_tile(s, MARGIN + i * (tile_w + Inches(0.25)), Inches(2.05), tile_w, Inches(1.75), value, label)
+    session_chart(s, n, MARGIN, Inches(4.2), Inches(7.4), Inches(2.75))
+    add_text(s, MARGIN + Inches(7.9), Inches(4.6), CONTENT_W - Inches(7.9), Inches(1.8), [
+        ("Each Session landed close to the Video phase speed.", 16, INK, True),
+        (f"{len(n.webcam_sessions)} Sessions × 60 s, Brio 105 at 1280×720, 30 fps.", 14, MUTED, False)])
 
     # 5b Demo video: webcam ----------------------------------------------------------------------------
     s = d.slide(
