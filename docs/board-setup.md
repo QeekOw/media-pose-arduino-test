@@ -33,6 +33,7 @@ If `mediapipe` fails to install or run, stop. Record the exact error on the tick
 | Copy Run files back | `.\scripts\pull-runs.ps1` (lands in `runs\board\`) |
 | Run the whole Video phase unattended | `.\scripts\run-campaign.ps1` (see Campaign below) |
 | Run the Webcam phase | `.\scripts\run-campaign.ps1 -Webcam` (see Webcam phase below) |
+| Make a Demo recording for the Demo videos | `.\scripts\record-demo.ps1` (see `docs/demo-videos.md`) |
 | Analyse | `$env:PYTHONPATH="src"; uv run python -m bench.analysis runs\board` |
 | Verdicts, summary table, charts | `$env:PYTHONPATH="src"; uv run python -m bench.report runs\board\<id> runs\dev` (images in `report\`) |
 
