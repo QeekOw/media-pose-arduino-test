@@ -3,9 +3,13 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 LANDMARK_COUNT = 33
+VIDEO, WEBCAM = "video", "webcam"
+PHASES = (VIDEO, WEBCAM)
+# The clip slot of a Webcam phase session, in the header and the file name.
+LIVE = "live"
 
 
-def run_file_name(variant: str, clip_stem: str, repeat: int, machine: str, phase: str = "video") -> str:
+def run_file_name(variant: str, clip_stem: str, repeat: int, machine: str, phase: str = VIDEO) -> str:
     return f"{phase}__{variant}__{clip_stem}__r{repeat}__{machine}.jsonl"
 
 
@@ -38,6 +42,37 @@ class Frame:
     @property
     def frame_ms(self) -> float:
         return self.video_ms + self.model_ms
+
+
+@dataclass(frozen=True)
+class LiveFrame:
+    """One camera frame in the Webcam phase. It was dropped when no result ever came back for it."""
+
+    index: int
+    capture_ms: float
+    read_ms: float
+    result_ms: float | None
+    landmarks: list[list[float]] | None
+
+    @property
+    def dropped(self) -> bool:
+        return self.result_ms is None
+
+    @property
+    def delay_ms(self) -> float | None:
+        return None if self.result_ms is None else self.result_ms - self.capture_ms
+
+
+def live_frame_record(frame: LiveFrame) -> dict:
+    return {
+        "type": "live_frame",
+        "index": frame.index,
+        "capture_ms": frame.capture_ms,
+        "read_ms": frame.read_ms,
+        "result_ms": frame.result_ms,
+        "dropped": frame.dropped,
+        "landmarks": frame.landmarks,
+    }
 
 
 @dataclass(frozen=True)
@@ -76,11 +111,53 @@ def _landmarks(value: list | None) -> list[list[float]] | None:
     return value
 
 
+def _number(record: dict, name: str) -> float:
+    value = record[name]
+    if type(value) not in (int, float):
+        raise TypeError(f"{name} is not a number: {value!r}")
+    return value
+
+
+def _live_frame(record: dict) -> LiveFrame:
+    index = record["index"]
+    if type(index) is not int:
+        raise TypeError(f"index is not an integer: {index!r}")
+    result_ms = None if record["result_ms"] is None else _number(record, "result_ms")
+    frame = LiveFrame(
+        index=index,
+        capture_ms=_number(record, "capture_ms"),
+        read_ms=_number(record, "read_ms"),
+        result_ms=result_ms,
+        landmarks=_landmarks(record.get("landmarks")),
+    )
+    if record["dropped"] is not frame.dropped:
+        raise TypeError(f"dropped is {record['dropped']!r} but result_ms is {result_ms!r}")
+    if frame.dropped and frame.landmarks is not None:
+        raise TypeError("a dropped frame has landmarks")
+    if frame.delay_ms is not None and frame.delay_ms < 0:
+        raise TypeError("result_ms is before capture_ms")
+    return frame
+
+
+def read_phase(path: str | Path) -> str | None:
+    """The phase in the header, read from the first line alone. None when that line is not a header with a known phase."""
+    with Path(path).open(encoding="utf-8", errors="replace") as f:
+        first = next((line for line in f if line.strip()), "")
+    try:
+        record = json.loads(first)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(record, dict) and record.get("type") == "header" and record.get("phase") in PHASES:
+        return record["phase"]
+    return None
+
+
 @dataclass(frozen=True)
 class RunFile:
     path: Path
     header: Header | None
     frames: list[Frame]
+    live_frames: list[LiveFrame]
     samples: list[Sample]
     status: str | None
     problem: str | None
@@ -92,6 +169,7 @@ def read_run(path: str | Path) -> RunFile:
     lines = [(n, ln) for n, ln in enumerate(text.splitlines(), 1) if ln.strip()]
     header = None
     frames: list[Frame] = []
+    live_frames: list[LiveFrame] = []
     samples: list[Sample] = []
     status = None
     problem = None
@@ -100,6 +178,8 @@ def read_run(path: str | Path) -> RunFile:
             record = json.loads(line)
             kind = record.get("type")
             if kind == "header" and pos == 0:
+                if record["phase"] not in PHASES:
+                    raise TypeError(f"phase is not one of {PHASES}: {record['phase']!r}")
                 header = Header(
                     format_version=record["format_version"],
                     phase=record["phase"],
@@ -122,6 +202,8 @@ def read_run(path: str | Path) -> RunFile:
                         landmarks=_landmarks(record.get("landmarks")),
                     )
                 )
+            elif kind == "live_frame":
+                live_frames.append(_live_frame(record))
             elif kind == "sample":
                 samples.append(_sample(record))
             elif kind == "status":
@@ -136,4 +218,6 @@ def read_run(path: str | Path) -> RunFile:
             break
     if header is None and problem is None:
         problem = "no header line"
-    return RunFile(path=path, header=header, frames=frames, samples=samples, status=status, problem=problem)
+    return RunFile(
+        path=path, header=header, frames=frames, live_frames=live_frames, samples=samples, status=status, problem=problem
+    )

@@ -386,3 +386,80 @@ def test_header_sample_interval_is_optional(tmp_path):
 
     assert read_run(old).header.sample_interval_s is None
     assert read_run(new).header.sample_interval_s == 0.5
+
+
+POSE = [[0.5, 0.5, 0.0, 1.0]] * 33
+
+
+def live_frame(index, capture_ms, result_ms, pose=True, read_ms=None):
+    return {"type": "live_frame", "index": index, "capture_ms": capture_ms,
+            "read_ms": capture_ms + 5.0 if read_ms is None else read_ms, "result_ms": result_ms,
+            "dropped": result_ms is None, "landmarks": POSE if pose and result_ms is not None else None}
+
+
+def write_live_run(path, frames, status="completed", variant="lite", repeat=1, machine="board", samples=()):
+    """frames: (capture_ms, result_ms or None, has_pose) per camera frame, in capture order."""
+    lines = [{"type": "header", "format_version": 1, "phase": "webcam", "variant": variant, "clip": "live",
+              "repeat": repeat, "started_at": "2026-10-31T12:00:00+00:00", "machine": {"name": machine}}]
+    lines += [live_frame(i, capture_ms, result_ms, pose) for i, (capture_ms, result_ms, pose) in enumerate(frames)]
+    lines.extend(samples)
+    if status is not None:
+        lines.append({"type": "status", "status": status, "detail": ""})
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def test_live_frames_are_read_with_their_fate(tmp_path):
+    run = write_live_run(tmp_path / "a.jsonl", [(1000.0, 1200.0, True), (1033.0, None, False), (1066.0, 1250.0, False)])
+
+    parsed = read_run(run)
+
+    assert parsed.problem is None and parsed.frames == []
+    assert [(f.index, f.dropped, f.delay_ms) for f in parsed.live_frames] == [
+        (0, False, 200.0), (1, True, None), (2, False, 184.0),
+    ]
+    assert [f.landmarks is not None for f in parsed.live_frames] == [True, False, False]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"dropped": True},
+        {"result_ms": None},
+        {"dropped": 0},
+        {"result_ms": 899.0},
+        {"capture_ms": "1000"},
+        {"read_ms": None},
+        {"index": 1.0},
+    ],
+)
+def test_a_live_frame_that_contradicts_itself_is_a_corrupt_line(tmp_path, bad):
+    run = write_live_run(tmp_path / "a.jsonl", [(900.0, 1100.0, True)] * 2)
+    lines = run.read_text(encoding="utf-8").splitlines()
+    lines[2] = json.dumps({**json.loads(lines[2]), **bad})
+    run.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    parsed = read_run(run)
+
+    assert parsed.problem == "corrupt line 3"
+    assert len(parsed.live_frames) == 1
+
+
+def test_a_dropped_frame_with_landmarks_is_a_corrupt_line(tmp_path):
+    run = write_live_run(tmp_path / "a.jsonl", [(1000.0, None, False)])
+    lines = run.read_text(encoding="utf-8").splitlines()
+    lines[1] = json.dumps({**json.loads(lines[1]), "landmarks": POSE})
+    run.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert read_run(run).problem == "corrupt line 2"
+
+
+def test_a_header_with_an_unknown_phase_is_a_corrupt_line(tmp_path):
+    run = write_run(tmp_path / "a.jsonl", [100] * 60)
+    header, *rest = run.read_text(encoding="utf-8").splitlines()
+    run.write_text("\n".join([json.dumps({**json.loads(header), "phase": "live"}), *rest]) + "\n")
+
+    parsed = read_run(run)
+
+    assert parsed.problem == "corrupt line 1"
+    assert parsed.header is None
