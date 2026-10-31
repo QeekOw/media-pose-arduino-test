@@ -1,10 +1,22 @@
 import json
 import os
+import subprocess
 
 import pytest
 
 from bench.analysis import WARMUP_FRAMES, analyze
-from bench.report import CLIPS, NONE_PASSED, REPEATS, pooled_pck, format_verdicts, main, spread, summary_table, verdicts
+from bench.report import (
+    CLIPS,
+    NONE_PASSED,
+    REPEATS,
+    format_verdicts,
+    main,
+    pooled_pck,
+    provenance,
+    spread,
+    summary_table,
+    verdicts,
+)
 
 POSE = [[0.3 + i * 0.01, 0.2 + i * 0.015, 0.0, 1.0] for i in range(33)]
 
@@ -225,6 +237,8 @@ def test_main_prints_verdicts_and_writes_charts(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "heavy: PASS" in out
     assert "Spread across repeats" in out
+    head = subprocess.run(["git", "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert f"Made by commit {head}" in out
     images = sorted(p.name for p in (tmp_path / "out").iterdir())
     assert images == ["accuracy-vs-speed.png", "fps.png", "frame-times.png", "summary-table.png", "temperature.png"]
 
@@ -290,3 +304,20 @@ def test_hard_links_do_not_add_repeats(tmp_path):
 
     assert v.runs == 5
     assert failed_names(v) == ["3 Runs on each of the five Campaign Clips"]
+
+
+def test_provenance_names_the_commit_and_the_inputs(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                    "--allow-empty", "-m", "x"], check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "--short=7", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+    assert provenance(["runs/board/x", "runs/dev"], repo=tmp_path) == f"Made by commit {head} from runs/board/x, runs/dev"
+    (tmp_path / "tracked.txt").write_text("a")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.txt"], check=True)
+    assert provenance(["runs/dev"], repo=tmp_path) == f"Made by commit {head} + uncommitted changes from runs/dev"
+
+
+def test_provenance_outside_git_says_the_commit_is_unknown(tmp_path):
+    assert provenance(["runs/dev"], repo=tmp_path) == "Made by an unknown commit from runs/dev"

@@ -1,6 +1,7 @@
 """Turn Run files into the answer: Pass criteria verdicts (ADR 0004), spread across repeats, a summary table and charts."""
 import argparse
 import operator
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,6 +24,25 @@ REPEATS = 3
 NONE_PASSED = (
     'No Model variant passed the Pass criteria, so the Webcam phase falls back to an "as-is" Lite demo.'
 )
+
+REPO = Path(__file__).resolve().parent
+
+
+def provenance(paths: list[str], repo: Path = REPO) -> str:
+    """Which commit made this report, and from which Run files, so a stale verdict shows up as a commit mismatch."""
+    def git(*args: str) -> str | None:
+        try:
+            done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    head = git("rev-parse", "--short=7", "HEAD")
+    if head is None:
+        commit = "an unknown commit"
+    else:
+        commit = f"commit {head}" + (" + uncommitted changes" if git("status", "--porcelain", "--untracked-files=no") else "")
+    return f"Made by {commit} from {', '.join(paths)}"
 
 
 def failed_runs(runs: list[RunSummary]) -> int:
@@ -216,7 +236,7 @@ def summary_table(summaries: list[RunSummary]) -> tuple[list[str], list[list[str
     return headers, rows
 
 
-def write_charts(summaries: list[RunSummary], out_dir: Path) -> list[Path]:
+def write_charts(summaries: list[RunSummary], out_dir: Path, footer: str = "") -> list[Path]:
     plt.rcParams.update({"font.size": 16, "axes.titlesize": 20, "axes.spines.top": False, "axes.spines.right": False})
     out_dir.mkdir(parents=True, exist_ok=True)
     board, laptop = (by_variant(campaign_runs(summaries, m)) for m in (BOARD, LAPTOP))
@@ -226,6 +246,8 @@ def write_charts(summaries: list[RunSummary], out_dir: Path) -> list[Path]:
 
     def save(fig, name: str) -> None:
         path = out_dir / name
+        if footer:
+            fig.text(0.99, -0.02, footer, ha="right", va="top", fontsize=10, color="#5B6573")
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         written.append(path)
@@ -325,8 +347,9 @@ def main(argv: list[str] | None = None) -> int:
     print("\nSpread across repeats\n" + format_spread(spread(summaries)))
     headers, rows = summary_table(summaries)
     print("\nSummary\n" + _table([h.replace("\n", " ") for h in headers], rows))
-    print()
-    for path in write_charts(summaries, args.out_dir):
+    made_by = provenance(args.paths)
+    print(made_by + "\n")
+    for path in write_charts(summaries, args.out_dir, made_by):
         print(f"wrote {path}")
     return 0
 
