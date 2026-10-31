@@ -57,3 +57,7 @@ _Avoid_: live test, camera test, real-time phase
 **Session**:
 One Webcam phase Run: one Model variant fed live frames from the webcam for a fixed time, 60 s by default. Each variant in scope gets three.
 _Avoid_: take, recording, live Run
+
+**Demo recording**:
+A webcam capture on the Board that saves the camera frames together with the pose results, made only to show tracking on a slide. It is never measured, never counted as a Session, never given to Analysis, and never made while a Campaign runs.
+_Avoid_: demo Session, demo Run, recording
