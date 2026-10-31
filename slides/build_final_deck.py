@@ -594,9 +594,9 @@ def build(n: Numbers, out: Path) -> Path:
         "Final results of the MediaPipe pose benchmark on the Arduino UNO Q. "
         "Answer first, then the evidence, then the limits and next steps. About 12 minutes."))
     rect(s, 0, 0, Inches(0.18), SLIDE_H, fill=ACCENT)
-    add_text(s, Inches(1.1), Inches(2.3), Inches(11), Inches(3.2), [
+    add_text(s, Inches(1.1), Inches(2.3), Inches(11.6), Inches(3.2), [
         ("BENCHMARK RESULTS", 14, ACCENT, True),
-        ("Testing MediaPipe pose models on the Arduino UNO Q", 40, INK, True),
+        ("Testing MediaPipe pose models on the Arduino UNO Q", 36, INK, True),
         ("Which model runs best on the Board, and how fast: results of the Video phase and Webcam phase", 22, MUTED, False),
     ])
     add_text(s, Inches(1.1), Inches(6.3), Inches(11), Inches(0.4), [("November 2026", 14, FAINT, False)])
