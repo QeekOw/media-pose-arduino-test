@@ -18,7 +18,7 @@ def _meminfo_mb() -> dict[str, int | None]:
     meminfo = Path("/proc/meminfo")
     if not meminfo.exists():
         return {"ram_total_mb": None, "ram_available_mb": None}
-    kb = {k: int(v.split()[0]) for k, v in (l.split(":", 1) for l in meminfo.read_text().splitlines())}
+    kb = {k: int(v.split()[0]) for k, v in (line.split(":", 1) for line in meminfo.read_text().splitlines())}
     return {"ram_total_mb": kb["MemTotal"] // 1024, "ram_available_mb": kb["MemAvailable"] // 1024}
 
 
