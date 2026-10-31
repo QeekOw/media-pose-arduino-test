@@ -2,16 +2,17 @@
 
     python -m bench.live --variant lite --repeat 1 --seconds 60
 
-Every frame the camera delivers goes to MediaPipe in LIVE_STREAM mode, and MediaPipe skips the frames it is too
-busy for. The result callback runs on a MediaPipe thread and only queues. This (main) thread works out each
-frame's fate and stays the Run file's only writer.
+The camera is read at its own rate. A frame goes to MediaPipe in LIVE_STREAM mode only when the previous one's
+result has come back, and every frame read meanwhile is dropped. MediaPipe 0.10.18 queues frames rather than
+skipping them, so feeding it every frame grows the delay without bound (ADR 0006). The result callback runs on a
+MediaPipe thread and only queues. This (main) thread works out each frame's fate and stays the Run file's only
+writer.
 """
 import argparse
 import glob
 import json
 import subprocess
 import time
-from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,42 +136,50 @@ class Result:
     landmarks: list[list[float]] | None
 
 
-class InFlight:
-    """Frames handed to MediaPipe whose fate is not known yet. Main thread only.
+class Gate:
+    """Lets one frame at a time into MediaPipe. Main thread only.
 
-    MediaPipe returns results in timestamp order and never calls back for a frame it skipped. So a result for
-    timestamp T settles every frame sent before T as dropped and the frame sent at T as processed.
+    A frame read while another is in flight is never sent, so it is dropped. Its line waits behind the frame in
+    flight, so the Run file stays in frame order.
     """
 
     def __init__(self) -> None:
-        self._waiting: deque[Sent] = deque()
+        self._sent: Sent | None = None
+        self._dropped: list[LiveFrame] = []
 
-    def __len__(self) -> int:
-        return len(self._waiting)
+    @property
+    def busy(self) -> bool:
+        return self._sent is not None
 
-    def sent(self, frame: Sent) -> None:
-        self._waiting.append(frame)
+    def send(self, frame: Sent) -> None:
+        if self._sent is not None:
+            raise RuntimeError(f"frame {frame.index} sent while frame {self._sent.index} is in flight")
+        self._sent = frame
 
-    def _resolve(self, result: Result | None) -> LiveFrame:
-        f = self._waiting.popleft()
+    def drop(self, index: int, capture_ms: float, read_ms: float) -> None:
+        if self._sent is None:
+            raise RuntimeError(f"frame {index} dropped with no frame in flight")
+        self._dropped.append(LiveFrame(index, capture_ms, read_ms, None, None))
+
+    def _release(self, result: Result | None) -> list[LiveFrame]:
+        f, dropped = self._sent, self._dropped
+        self._sent, self._dropped = None, []
         if result is None:
-            return LiveFrame(f.index, f.capture_ms, f.read_ms, None, None)
-        return LiveFrame(f.index, f.capture_ms, f.read_ms, result.result_ms, result.landmarks)
+            return [LiveFrame(f.index, f.capture_ms, f.read_ms, None, None), *dropped]
+        return [LiveFrame(f.index, f.capture_ms, f.read_ms, result.result_ms, result.landmarks), *dropped]
 
     def settle(self, results: list[Result]) -> list[LiveFrame]:
-        """The frames these results decide, in index order."""
+        """The frames these results decide, in index order: the one in flight and those dropped behind it."""
         settled = []
         for r in results:
-            while self._waiting and self._waiting[0].timestamp_ms < r.timestamp_ms:
-                settled.append(self._resolve(None))
-            if not self._waiting or self._waiting[0].timestamp_ms != r.timestamp_ms:
-                raise RuntimeError(f"result for timestamp {r.timestamp_ms} matches no frame waiting for one")
-            settled.append(self._resolve(r))
+            if self._sent is None or self._sent.timestamp_ms != r.timestamp_ms:
+                raise RuntimeError(f"result for timestamp {r.timestamp_ms} matches no frame in flight")
+            settled += self._release(r)
         return settled
 
     def give_up(self) -> list[LiveFrame]:
-        """Every frame still waiting is dropped: its result never came."""
-        return [self._resolve(None) for _ in range(len(self._waiting))]
+        """The frame in flight is dropped, since its result never came, and so are those behind it."""
+        return self._release(None) if self._sent is not None else []
 
 
 def run_live(
@@ -200,7 +209,7 @@ def run_live(
                     arrived.append(results.get_nowait())
                 except Empty:
                     break
-            for frame in [*flight.settle(arrived), *extra]:
+            for frame in [*gate.settle(arrived), *extra]:
                 write(live_frame_record(frame))
 
         write({
@@ -224,7 +233,7 @@ def run_live(
         sampler.start()
         write_samples()
         results: SimpleQueue[Result] = SimpleQueue()
-        flight = InFlight()
+        gate = Gate()
 
         def on_result(result, image, timestamp_ms: int) -> None:
             result_ms = time.monotonic() * 1000
@@ -249,18 +258,21 @@ def run_live(
                         end_ms = capture_ms + seconds * 1000
                     if capture_ms >= end_ms:
                         break
-                    # MediaPipe needs strictly rising timestamps and hands each one back with its result.
-                    timestamp_ms = max(int(capture_ms), timestamp_ms + 1)
-                    flight.sent(Sent(index, timestamp_ms, capture_ms, read_ms))
-                    landmarker.detect_async(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), timestamp_ms)
-                    index += 1
                     write_settled()
+                    if gate.busy:
+                        gate.drop(index, capture_ms, read_ms)
+                    else:
+                        # MediaPipe needs strictly rising timestamps and hands each one back with its result.
+                        timestamp_ms = max(int(capture_ms), timestamp_ms + 1)
+                        gate.send(Sent(index, timestamp_ms, capture_ms, read_ms))
+                        landmarker.detect_async(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), timestamp_ms)
+                    index += 1
                     write_samples()
                 drain_until = time.monotonic() + DRAIN_S
-                while flight and time.monotonic() < drain_until:
+                while gate.busy and time.monotonic() < drain_until:
                     time.sleep(0.01)
                     write_settled()
-                write_settled(*flight.give_up())
+                write_settled(*gate.give_up())
             status, detail = "completed", ""
         except CameraError as e:
             status, detail = "crashed", str(e)
