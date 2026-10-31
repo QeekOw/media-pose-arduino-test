@@ -434,6 +434,7 @@ def write_webcam_charts(
     ax.bar_label(bars, [f"processed {s.processed_fps:.1f} of {s.camera_fps:.1f} ({s.dropped_pct:.0f}% dropped)"
                         for s in stats], padding=3)
     ax.axhline(10, color="#B42318", linestyle="--", linewidth=1.5, label="pass: 10 FPS")
+    ax.set_ylim(0, max(s.camera_fps for s in stats) * 1.15)
     ax.set_xticks(x, names)
     ax.set_ylabel("frames per second")
     ax.set_title("Webcam on the Board: camera frames processed and dropped")
