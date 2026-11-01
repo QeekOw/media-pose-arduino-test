@@ -9,7 +9,7 @@ The Linux side of the Arduino UNO Q 4 GB (Qualcomm QRB2210 running Debian), wher
 _Avoid_: Arduino, device, MCU (the STM32 microcontroller plays no part in the benchmark)
 
 **Dev machine**:
-The Windows laptop where code is written and from which the Board is driven over SSH.
+The Windows laptop where code is written and from which the Board is driven over SSH. In the workshop (`WORKSHOP.md`), each attendee's own Windows or macOS laptop plays this part.
 _Avoid_: host, PC
 
 ## Models
@@ -23,6 +23,10 @@ _Avoid_: model type, version, complexity
 **Clip**:
 One of the five free stock videos used in the Video phase, each chosen to cover one situation (front view, side view, fast movement, far away or partly hidden, empty room) and converted to the same size, frame rate, and length.
 _Avoid_: video, sample, test video
+
+**Workshop video**:
+A short video a workshop attendee runs on the Board with `bench.workshop` (`WORKSHOP.md`): one of the two in `workshop-clips/`, cut from the Clips, or one the attendee filmed. Never measured for the study, never given to Analysis.
+_Avoid_: Clip (a Clip is one of the five videos of the Video phase)
 
 **Run**:
 One Model variant processing one clip from start to finish on the Board. Each pairing of Model variant and clip is repeated as several Runs.
