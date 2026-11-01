@@ -53,3 +53,20 @@ Full body in frame matters most for `front`, `side` and `fast`. For `far`, the p
    .\scripts\pull-runs.ps1
    $env:PYTHONPATH="src"; uv run python -m bench.analysis runs\board
    ```
+
+## Workshop videos
+
+`workshop-clips/` holds the first 10 s of two Clips, committed so that a workshop attendee has a video without downloading anything (`WORKSHOP.md`). They are cut from the prepared Clips above, so the sources and licenses are the same. The Pexels License allows this; it only forbids selling unaltered copies or putting them on another stock site.
+
+| Workshop video | Cut from | Source URL | License |
+| --- | --- | --- | --- |
+| `front.mp4` | `clips/front.mp4`, 0–10 s | https://www.pexels.com/video/a-woman-standing-outdoors-while-drinking-a-cup-of-coffee-3044530/ | Pexels License |
+| `fast.mp4` | `clips/fast.mp4`, 0–10 s | https://www.pexels.com/video/a-woman-jumping-on-a-trampoline-6571901/ | Pexels License |
+
+Remake them from the prepared Clips with:
+
+```powershell
+foreach ($c in "front", "fast") { ffmpeg -y -v error -i "clips\$c.mp4" -t 10 -an -c:v libx264 -pix_fmt yuv420p -preset slow -crf 23 -movflags +faststart "workshop-clips\$c.mp4" }
+```
+
+They are never used in the study's Runs, and Runs on them are never given to Analysis.

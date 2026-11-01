@@ -29,7 +29,15 @@ CONNECTIONS = (
 MIN_VISIBILITY = 0.5
 BLUR_CELLS = 8
 LENGTH_S = 15.0
-WEBCAM_CAPTION = "Lite (as-is) on the Board | live from the Brio 105 | skeleton shown as it arrived"
+WEBCAM_CAPTION = "{variant} (as-is) on the Board | live from {camera} | skeleton shown as it arrived"
+
+
+def webcam_caption(header: dict) -> str:
+    """Names the Model variant, and the Brio 105 only when the Demo recording came from it (see
+    bench.demo_record.open_demo_camera)."""
+    device = header.get("camera", {}).get("device", "")
+    return WEBCAM_CAPTION.format(variant=header.get("variant", "lite").capitalize(),
+                                 camera="the Brio 105" if "Brio_105" in device else "a USB webcam")
 
 
 def live_view(frames: list[LiveFrame]) -> list[Landmarks | None]:
@@ -196,13 +204,14 @@ def webcam(demo_recording: Path, out: Path, start_s: float, length_s: float) -> 
     keep = window([f.capture_ms for f in rec.frames], start_s, length_s)
     span_s = (rec.frames[keep.stop - 1].capture_ms - rec.frames[keep.start].capture_ms) / 1000 if keep else 0
     fps = (len(keep) - 1) / span_s if span_s > 0 else size["fps"]
+    caption = webcam_caption(rec.header)
 
     def frames() -> Iterator[np.ndarray]:
         for i in keep:
             img = cv2.imdecode(np.frombuffer(rec.jpeg(rec.frames[i].index), np.uint8), cv2.IMREAD_COLOR)
             blur(img, boxes[i])
             draw_skeleton(img, shown[i])
-            draw_caption(img, WEBCAM_CAPTION)
+            draw_caption(img, caption)
             yield img
 
     encode(frames(), fps, out, len(keep))

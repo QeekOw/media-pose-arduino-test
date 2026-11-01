@@ -32,7 +32,7 @@ What it shows:
 
 - **Live view:** every camera frame, with the skeleton from the latest result that had arrived when the frame was read. It updates a few times a second and trails the movement by the delay, as someone watching live would see it.
 - **Face blur:** placed where the face was when the frame was captured, between the poses found before and after it. That is hindsight only the drawing step has, which is fine because the blur is a privacy filter, not part of what the Board produced. A frame with no pose within 0.5 s is blurred in full, so a missed detection never shows a face. Blurring happens after pose estimation, so it does not change the landmarks.
-- **Caption:** "Lite (as-is) on the Board | live from the Brio 105 | skeleton shown as it arrived", with `|` because OpenCV's built-in fonts cannot draw `·`. It has no numbers: a Demo recording is not measured, and the preview adds some work on the Board. The FPS and delay belong on the Webcam results slide, from Analysis.
+- **Caption:** "Lite (as-is) on the Board | live from the Brio 105 | skeleton shown as it arrived". It names the Model variant of the Demo recording, and says "a USB webcam" instead of "the Brio 105" when another webcam made it (the workshop, `WORKSHOP.md`). It uses `|` because OpenCV's built-in fonts cannot draw `·`. It has no numbers: a Demo recording is not measured, and the preview adds some work on the Board. The FPS and delay belong on the Webcam results slide, from Analysis.
 
 Before sharing, open `webcam.png` and a frame from a fast-movement moment. Only real footage shows whether the blur is strong enough: the first one passed its tests and still showed a face.
 
