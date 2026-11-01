@@ -10,6 +10,7 @@ While it runs, every third JPEG goes to stdout as a preview stream: for --lead-i
 starts, so the tester can get into frame, then throughout it. Messages go to stderr so they never mix with it.
 """
 import argparse
+import glob
 import sys
 import threading
 import time
@@ -23,13 +24,15 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
 from bench.demo_recording import DemoRecordingWriter
-from bench.live import DRAIN_S, CameraError, Gate, Result, Sent, open_camera
+from bench.live import BRIO, DRAIN_S, Camera, CameraError, Gate, Result, Sent, open_camera
 from bench.models import ensure_model
 from bench.run_one import _landmarks, _sample_interval
 
 # Only Lite runs in the Webcam phase, as-is, because no Model variant met the Pass criteria (ADR 0004).
 VARIANT = "lite"
 PREVIEW_EVERY = 3
+# Video-capture node of every USB webcam. A webcam also lists metadata nodes (video-index1 and up), never these.
+ANY_WEBCAM = "/dev/v4l/by-id/usb-*-video-index0"
 
 
 def say(text: str) -> None:
@@ -60,11 +63,21 @@ class Preview:
             say("preview closed; the Demo recording carries on")
 
 
+def open_demo_camera() -> Camera:
+    """The Brio exactly as the Webcam phase sets it up, or else the first USB webcam in whatever mode it gives."""
+    if glob.glob(BRIO):
+        return open_camera(raw=True)
+    camera = open_camera(ANY_WEBCAM, raw=True, exact=False)
+    size = camera.size
+    say(f"no Brio 105, so using {camera.settings['device']} at {size['width']}x{size['height']}, {size['fps']:g} fps")
+    return camera
+
+
 def record(seconds: float, lead_in: float, out_root: Path, models_dir: Path, preview: bool) -> Path:
     model = ensure_model(VARIANT, models_dir)
     out_dir = out_root / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     try:
-        camera = open_camera(raw=True)
+        camera = open_demo_camera()
     except CameraError as e:
         raise SystemExit(str(e))
     stream = Preview() if preview else None

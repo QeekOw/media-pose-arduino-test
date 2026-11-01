@@ -1,4 +1,4 @@
-from bench.demo_video import face_boxes, live_view, window
+from bench.demo_video import face_boxes, live_view, webcam_caption, window
 from bench.runfile import LiveFrame
 
 POSE_A = [[0.1, 0.1, 0.0, 1.0]] * 33
@@ -102,3 +102,17 @@ def test_a_window_running_past_the_last_frame_stops_there():
     times_ms = [250.0 * i for i in range(6)]
 
     assert window(times_ms, start_s=0.5, length_s=15.0) == range(2, 6)
+
+
+def test_the_caption_names_the_brio_only_when_the_demo_recording_came_from_it():
+    brio = {"camera": {"device": "/dev/v4l/by-id/usb-046d_Brio_105_2524ZBL03X08-video-index0"}}
+    other = {"camera": {"device": "/dev/v4l/by-id/usb-Generic_HD_Webcam_200901010001-video-index0"}}
+
+    assert "live from the Brio 105" in webcam_caption(brio)
+    assert "live from a USB webcam" in webcam_caption(other)
+    assert "live from a USB webcam" in webcam_caption({})
+
+
+def test_the_caption_names_the_model_variant_of_the_demo_recording():
+    assert webcam_caption({"variant": "full"}).startswith("Full (as-is) on the Board")
+    assert webcam_caption({}).startswith("Lite (as-is) on the Board")

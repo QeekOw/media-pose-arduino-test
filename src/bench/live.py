@@ -83,13 +83,16 @@ def _fourcc(cap: cv2.VideoCapture) -> str:
     return "".join(chr((code >> shift) & 0xFF) for shift in (0, 8, 16, 24))
 
 
-def open_camera(pattern: str = BRIO, raw: bool = False) -> Camera:
+def open_camera(pattern: str = BRIO, raw: bool = False, exact: bool = True) -> Camera:
     """Find, configure and check the camera. Raises CameraError naming what is wrong.
 
     raw hands over each frame undecoded (see Camera), for a Demo recording that saves the camera's own JPEGs.
+    exact (the default, and what every Session uses) demands one matching camera that delivers exactly 1280x720
+    MJPG at 30 fps with exposure_dynamic_framerate off. exact=False is for a Demo recording on any USB webcam: it
+    takes the first match, asks for the same settings, and accepts whatever the camera gives instead.
     """
     devices = sorted(glob.glob(pattern))
-    if len(devices) != 1:
+    if len(devices) != 1 and (exact or not devices):
         raise CameraError(f"expected one camera matching {pattern}, found {len(devices)}")
     device = devices[0]
     cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
@@ -102,10 +105,16 @@ def open_camera(pattern: str = BRIO, raw: bool = False) -> Camera:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
         cap.set(cv2.CAP_PROP_FPS, FPS)
         # On by default, it lets the camera slow to about 20 fps in dim light to lengthen exposure.
-        _v4l2_ctl(device, "--set-ctrl=exposure_dynamic_framerate=0")
-        got = _v4l2_ctl(device, "--get-ctrl=exposure_dynamic_framerate").strip()
-        if got.rsplit(":", 1)[-1].strip() != "0":
-            raise CameraError(f"exposure_dynamic_framerate did not switch off on {device}: {got!r}")
+        exposure_dynamic_framerate: int | None = 0
+        try:
+            _v4l2_ctl(device, "--set-ctrl=exposure_dynamic_framerate=0")
+            got = _v4l2_ctl(device, "--get-ctrl=exposure_dynamic_framerate").strip()
+            if got.rsplit(":", 1)[-1].strip() != "0":
+                raise CameraError(f"exposure_dynamic_framerate did not switch off on {device}: {got!r}")
+        except CameraError:
+            if exact:
+                raise
+            exposure_dynamic_framerate = None
         if raw and not cap.set(cv2.CAP_PROP_CONVERT_RGB, 0):
             raise CameraError(f"{device} cannot hand over raw frames")
         ok, bgr = cap.read()
@@ -119,7 +128,7 @@ def open_camera(pattern: str = BRIO, raw: bool = False) -> Camera:
         driver_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
         fourcc, fps = _fourcc(cap), cap.get(cv2.CAP_PROP_FPS)
         height, width = bgr.shape[:2]
-        if (width, height, fourcc, round(fps)) != (WIDTH, HEIGHT, FOURCC, FPS):
+        if exact and (width, height, fourcc, round(fps)) != (WIDTH, HEIGHT, FOURCC, FPS):
             raise CameraError(f"{device} gave {width}x{height} {fourcc} at {fps:g} fps, not {WIDTH}x{HEIGHT} {FOURCC} at {FPS}")
     except BaseException:
         cap.release()
@@ -129,7 +138,8 @@ def open_camera(pattern: str = BRIO, raw: bool = False) -> Camera:
     clock = "driver" if 0 <= now_ms - driver_ms < CLOCK_TOLERANCE_MS else "read"
     return Camera(
         cap,
-        settings={"device": device, "fourcc": fourcc, "exposure_dynamic_framerate": 0, "capture_clock": clock},
+        settings={"device": device, "fourcc": fourcc, "exposure_dynamic_framerate": exposure_dynamic_framerate,
+                  "capture_clock": clock},
         size={"width": width, "height": height, "fps": fps},
     )
 
